@@ -65,6 +65,28 @@ class CleanRulesTest(unittest.TestCase):
             "Un botón de login",
         )
 
+    def test_keeps_legitimate_comma_before_de(self):
+        self.assertEqual(
+            self.clean("Revisa el módulo, de hecho está roto"),
+            "Revisa el módulo, de hecho está roto.",
+        )
+
+    def test_does_not_collapse_words_with_digits(self):
+        self.assertEqual(self.clean("versión 1 1 5"), "Versión 1 1 5")
+        self.assertEqual(self.clean("10 10 pesos"), "10 10 pesos")
+
+    def test_keeps_esto_at_start(self):
+        self.assertEqual(
+            self.clean("Esto, por favor, revísalo"),
+            "Esto, por favor, revísalo",
+        )
+
+    def test_removes_este_as_filler(self):
+        self.assertEqual(
+            self.clean("Hola, este, quiero que, añadas un botón"),
+            "Hola, quiero que añadas un botón.",
+        )
+
     def test_capitalize_after_period(self):
         self.assertEqual(
             self.clean("primera frase. segunda frase"),
@@ -184,6 +206,12 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(
             dictado.collapse_phrase_repeats("hola mundo hola mundo"),
             "hola mundo",
+        )
+
+    def test_collapse_phrase_repeats_ignores_words_with_digits(self):
+        self.assertEqual(
+            dictado.collapse_phrase_repeats("10 20 10 20"),
+            "10 20 10 20",
         )
 
     def test_count_sentences(self):

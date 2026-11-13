@@ -725,7 +725,7 @@ HARD_FILLERS = re.compile(
 
 CLAUSE_FILLER = re.compile(
     r"(^|[,;:]\s*)"
-    r"(?:o sea|digamos|es decir|en plan|qué sé yo|cómo se llama|mira|oye|escucha|bueno|pues|este|esto)"
+    r"(?:o sea|digamos|es decir|en plan|qué sé yo|cómo se llama|mira|oye|escucha|bueno|pues|este)"
     r"\s*,\s*",
     re.IGNORECASE,
 )
@@ -745,6 +745,18 @@ def _norm_word(word: str) -> str:
     return re.sub(r"^[^\wáéíóúüñ]+|[^\wáéíóúüñ]+$", "", word.lower())
 
 
+def _has_digit(word: str) -> bool:
+    return any(ch.isdigit() for ch in word)
+
+
+def _drop_repeated_word(match: re.Match) -> str:
+    """Colapsa una palabra repetida salvo que contenga dígitos."""
+    word = match.group(1)
+    if _has_digit(word):
+        return match.group(0)
+    return word
+
+
 def collapse_phrase_repeats(text: str, max_n: int = 4) -> str:
     words = text.split()
     changed = True
@@ -756,7 +768,7 @@ def collapse_phrase_repeats(text: str, max_n: int = 4) -> str:
             while i + 2 * size <= len(words):
                 left = [_norm_word(w) for w in words[i:i + size]]
                 right = [_norm_word(w) for w in words[i + size:i + 2 * size]]
-                if left == right and all(left):
+                if left == right and all(left) and not any(_has_digit(w) for w in left):
                     del words[i + size:i + 2 * size]
                     changed = True
                     break
@@ -807,8 +819,10 @@ def clean_rules(text: str, cfg: dict) -> str:
     previous = None
     while previous != out:
         previous = out
-        out = WORD_REPEAT.sub(r"\1", out)
+        out = WORD_REPEAT.sub(_drop_repeated_word, out)
+    before_collapse = out
     out = collapse_phrase_repeats(out)
+    collapsed = out != before_collapse
 
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)
     out = re.sub(r"([,.;:!?])\1+", r"\1", out)
@@ -821,7 +835,8 @@ def clean_rules(text: str, cfg: dict) -> str:
         r"\1 \2 \3", out, flags=re.IGNORECASE,
     )
     # Coma espuria tras colapsar "un botón, un botón de login"
-    out = re.sub(r"([a-záéíóúüñ]+),\s+(de|del|con|para)\b", r"\1 \2", out)
+    if collapsed:
+        out = re.sub(r"([a-záéíóúüñ]+),\s+(de|del|con|para)\b", r"\1 \2", out)
     # "pues" intercalado sin pausa real
     out = re.sub(r",\s+pues\s+", ", ", out, flags=re.IGNORECASE)
     out = re.sub(r"(^|[.!?]\s+)pues\s+", r"\1", out, flags=re.IGNORECASE)
