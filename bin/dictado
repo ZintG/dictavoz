@@ -954,6 +954,13 @@ def polish(text: str, cfg: dict) -> tuple[str, str | None]:
 # Inserción
 # --------------------------------------------------------------------------
 
+def insert_command(key: str, text: str) -> list[str]:
+    """Construye el comando de xdotool para pegar o escribir el texto."""
+    if key == "type":
+        return ["xdotool", "type", "--clearmodifiers", "--delay", "5", "--", text]
+    return ["xdotool", "key", "--clearmodifiers", key]
+
+
 def insert_text(text: str, state: dict, cfg: dict) -> bool:
     wid = state.get("window")
     previous = get_clipboard() if cfg["insert"]["restore_clipboard"] else ""
@@ -973,7 +980,7 @@ def insert_text(text: str, state: dict, cfg: dict) -> bool:
     key = cfg["insert"]["key"] or detect_paste_key(wid)
     time.sleep(max(0, int(cfg["insert"]["paste_delay_ms"])) / 1000.0)
     try:
-        proc = run(["xdotool", "key", "--clearmodifiers", key], timeout=10)
+        proc = run(insert_command(key, text), timeout=10)
     except (OSError, subprocess.SubprocessError) as exc:
         raise DictadoError(f"xdotool falló: {exc}") from exc
     if proc.returncode != 0:
