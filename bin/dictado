@@ -480,7 +480,7 @@ def cmd_start(cfg: dict) -> int:
         "window": wid,
         "window_class": window_class(wid),
     })
-    notify("🎙️ Grabando…", "Pulsa Ctrl+Alt+D para parar.", enabled=cfg["notify"]["enabled"])
+    notify("🎙️ Grabando…", "Pulsa tu atajo de nuevo para parar.", enabled=cfg["notify"]["enabled"])
     return 0
 
 
@@ -518,12 +518,20 @@ def cmd_stop(cfg: dict) -> int:
         result = process_recording(wav, state, cfg)
     except DictadoError as exc:
         keep = PENDING_DIR / wav.name
+        copied = False
         try:
             secure_mkdir(PENDING_DIR)
             shutil.copy2(wav, keep)
             secure_file(keep)
+            copied = True
         except OSError:
             keep = wav
+        if copied:
+            for path in (wav, Path(str(wav) + ".trim.wav")):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
         print(f"dictado: {exc}", file=sys.stderr)
         notify("❌ Error de dictado", f"{exc}\nAudio guardado en {keep}", "critical",
                enabled=cfg["notify"]["enabled"])
@@ -1380,6 +1388,12 @@ def cmd_purge(purge_all: bool, assume_yes: bool) -> int:
             return 1
 
     removed = 0
+    active = recording_state() if not purge_all else None
+    if active:
+        print("hay una grabación en curso: no se borra el estado temporal")
+    directories = [PENDING_DIR]
+    if not active:
+        directories.append(STATE_DIR)
     if purge_all:
         if CONFIG_DIR.exists():
             shutil.rmtree(CONFIG_DIR, ignore_errors=True)
@@ -1391,7 +1405,7 @@ def cmd_purge(purge_all: bool, assume_yes: bool) -> int:
                 removed += 1
             except OSError:
                 pass
-    for directory in (PENDING_DIR, STATE_DIR):
+    for directory in directories:
         if directory.exists():
             for path in directory.iterdir():
                 try:
