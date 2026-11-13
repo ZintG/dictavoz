@@ -384,7 +384,7 @@ Y los audios fallidos en:
 ## Reinstalar desde cero
 
 ```bash
-cd dictado
+cd dictavoz
 ./install.sh --dry-run     # revisa el plan
 ./install.sh
 ```
@@ -418,5 +418,5 @@ Reúne esta información antes de abrir una incidencia:
 Puedes abrir la incidencia en:
 
 ```text
-https://github.com/ZintG/dictado/issues
+https://github.com/ZintG/dictavoz/issues
 ```

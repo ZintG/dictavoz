@@ -1,11 +1,13 @@
-# dictado
+# DictaVoz
 
 Global voice dictation for Linux with automatic text cleanup.
 
-Press a hotkey, speak, press it again, and clean text appears in the window you
-were using: no filler words, proper punctuation and capitalisation, and
-technical terms left intact. It works on any Linux desktop. Automatic pasting
-is available on X11; on Wayland the text is placed on the clipboard.
+The project is called **DictaVoz**; the command it installs is still
+**`dictado`**. Press a hotkey, speak, press it again, and clean text appears in
+the window you were using: no filler words, proper punctuation and
+capitalisation, and technical terms left intact. It works on any Linux desktop.
+Automatic pasting is available on X11; on Wayland the text is placed on the
+clipboard.
 
 ```
 global hotkey → arecord → silence trim → Gemini → local rules → paste
@@ -43,8 +45,8 @@ what is missing.
 ## Install
 
 ```bash
-git clone https://github.com/ZintG/dictado.git
-cd dictado
+git clone https://github.com/ZintG/dictavoz.git
+cd dictavoz
 ./install.sh
 ```
 

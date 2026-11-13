@@ -3,7 +3,7 @@
 ## Reportar una vulnerabilidad
 
 No abras una incidencia pública para problemas de seguridad. Usa el
-[reporte privado de vulnerabilidades de GitHub](https://github.com/ZintG/dictado/security/advisories/new).
+[reporte privado de vulnerabilidades de GitHub](https://github.com/ZintG/dictavoz/security/advisories/new).
 
 Incluye, si puedes:
 

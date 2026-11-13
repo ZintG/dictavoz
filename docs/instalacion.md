@@ -21,8 +21,8 @@ python3 --version
 ## Instalación recomendada
 
 ```bash
-git clone https://github.com/ZintG/dictado.git
-cd dictado
+git clone https://github.com/ZintG/dictavoz.git
+cd dictavoz
 ./install.sh
 ```
 
@@ -211,7 +211,7 @@ chmod 600 ~/.config/dictado/config.toml
 ## Actualizar
 
 ```bash
-cd dictado
+cd dictavoz
 git pull
 ./install.sh
 ```

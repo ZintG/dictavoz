@@ -1,10 +1,11 @@
-# dictado
+# DictaVoz
 
 Dictado por voz global para Linux con limpieza automática del texto.
 
-Pulsas un atajo, hablas, vuelves a pulsar y el texto aparece limpio en la
-ventana donde estabas: sin muletillas, con puntuación, mayúsculas y los
-términos técnicos respetados. Funciona en cualquier escritorio Linux; el
+El proyecto se llama **DictaVoz**; el comando que instala sigue siendo
+**`dictado`**. Pulsas un atajo, hablas, vuelves a pulsar y el texto aparece
+limpio en la ventana donde estabas: sin muletillas, con puntuación, mayúsculas
+y los términos técnicos respetados. Funciona en cualquier escritorio Linux; el
 pegado automático está disponible en X11 y en Wayland el texto queda en el
 portapapeles.
 
@@ -60,8 +61,8 @@ El instalador detecta la distribución e instala lo que falte con `apt`, `dnf`,
 ## Instalación rápida
 
 ```bash
-git clone https://github.com/ZintG/dictado.git
-cd dictado
+git clone https://github.com/ZintG/dictavoz.git
+cd dictavoz
 ./install.sh
 ```
 

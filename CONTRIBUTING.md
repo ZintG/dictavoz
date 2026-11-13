@@ -15,8 +15,8 @@ No hace falta instalar nada especial: el proyecto usa solo la biblioteca
 estándar de Python.
 
 ```bash
-git clone https://github.com/ZintG/dictado.git
-cd dictado
+git clone https://github.com/ZintG/dictavoz.git
+cd dictavoz
 make test
 make lint
 ```
