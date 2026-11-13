@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -635,7 +636,7 @@ def api_post(payload: dict, timeout: float, retries: int = 1, api_base: str | No
                 time.sleep(1)
                 continue
             raise DictadoError(last_error) from exc
-        except TimeoutError as exc:
+        except (TimeoutError, socket.timeout) as exc:
             last_error = "tiempo de espera agotado"
             if attempt < retries:
                 time.sleep(1)
