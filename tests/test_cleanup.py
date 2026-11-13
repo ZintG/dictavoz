@@ -71,6 +71,15 @@ class CleanRulesTest(unittest.TestCase):
             "Revisa el módulo, de hecho está roto.",
         )
 
+    def test_keeps_comma_outside_the_collapsed_phrase(self):
+        self.assertEqual(
+            self.clean(
+                "Revisa el módulo, de hecho está roto y quiero un botón "
+                "un botón de login"
+            ),
+            "Revisa el módulo, de hecho está roto y quiero un botón de login.",
+        )
+
     def test_does_not_collapse_words_with_digits(self):
         self.assertEqual(self.clean("versión 1 1 5"), "Versión 1 1 5")
         self.assertEqual(self.clean("10 10 pesos"), "10 10 pesos")

@@ -778,6 +778,10 @@ def collapse_phrase_repeats(text: str, max_n: int = 4) -> str:
                 right = [_norm_word(w) for w in words[i + size:i + 2 * size]]
                 if left == right and all(left) and not any(_has_digit(w) for w in left):
                     del words[i + size:i + 2 * size]
+                    last = i + size - 1
+                    following = _norm_word(words[last + 1]) if last + 1 < len(words) else ""
+                    if words[last].endswith(",") and following in {"de", "del", "con", "para"}:
+                        words[last] = words[last][:-1]
                     changed = True
                     break
                 i += 1
@@ -828,9 +832,7 @@ def clean_rules(text: str, cfg: dict) -> str:
     while previous != out:
         previous = out
         out = WORD_REPEAT.sub(_drop_repeated_word, out)
-    before_collapse = out
     out = collapse_phrase_repeats(out)
-    collapsed = out != before_collapse
 
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)
     out = re.sub(r"([,.;:!?])\1+", r"\1", out)
@@ -842,9 +844,6 @@ def clean_rules(text: str, cfg: dict) -> str:
         r"\b(el|la|los|las|un|una)\s+([\wáéíóúüñ]+),\s+(ese|esa|este|esta|aquel|aquella)\b",
         r"\1 \2 \3", out, flags=re.IGNORECASE,
     )
-    # Coma espuria tras colapsar "un botón, un botón de login"
-    if collapsed:
-        out = re.sub(r"([a-záéíóúüñ]+),\s+(de|del|con|para)\b", r"\1 \2", out)
     # "pues" intercalado sin pausa real
     out = re.sub(r",\s+pues\s+", ", ", out, flags=re.IGNORECASE)
     out = re.sub(r"(^|[.!?]\s+)pues\s+", r"\1", out, flags=re.IGNORECASE)
