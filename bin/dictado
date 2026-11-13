@@ -984,6 +984,13 @@ def insert_command(key: str, text: str) -> list[str]:
     return ["xdotool", "key", "--clearmodifiers", key]
 
 
+def insert_timeout(key: str, text: str) -> float:
+    """Tiempo máximo de xdotool: el modo type crece con la longitud del texto."""
+    if key == "type":
+        return 10 + len(text) * 0.02
+    return 10
+
+
 def insert_text(text: str, state: dict, cfg: dict) -> bool:
     wid = state.get("window")
     previous = get_clipboard() if cfg["insert"]["restore_clipboard"] else ""
@@ -1003,7 +1010,7 @@ def insert_text(text: str, state: dict, cfg: dict) -> bool:
     key = cfg["insert"]["key"] or detect_paste_key(wid)
     time.sleep(max(0, int(cfg["insert"]["paste_delay_ms"])) / 1000.0)
     try:
-        proc = run(insert_command(key, text), timeout=10)
+        proc = run(insert_command(key, text), timeout=insert_timeout(key, text))
     except (OSError, subprocess.SubprocessError) as exc:
         raise DictadoError(f"xdotool falló: {exc}") from exc
     if proc.returncode != 0:

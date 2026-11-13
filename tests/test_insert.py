@@ -39,6 +39,13 @@ class InsertCommandTest(unittest.TestCase):
             ["xdotool", "key", "--clearmodifiers", "ctrl+shift+v"],
         )
 
+    def test_type_timeout_grows_with_the_text(self) -> None:
+        self.assertEqual(dictado.insert_timeout("type", ""), 10)
+        self.assertAlmostEqual(dictado.insert_timeout("type", "a" * 500), 20.0)
+
+    def test_key_timeout_is_fixed(self) -> None:
+        self.assertEqual(dictado.insert_timeout("ctrl+v", "a" * 500), 10)
+
 
 if __name__ == "__main__":
     unittest.main()
