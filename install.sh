@@ -461,7 +461,7 @@ elif [ "$DRY_RUN" -eq 1 ]; then
   info "pondría prompt.paste = \"full\" en $CLI_JSON"
 else
   mkdir -p "$(dirname "$CLI_JSON")"
-  "$PYTHON" - "$CLI_JSON" <<'PY'
+  if "$PYTHON" - "$CLI_JSON" <<'PY'
 import json, os, sys
 path = sys.argv[1]
 data = {}
@@ -469,10 +469,12 @@ if os.path.exists(path):
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
-        data = {}
+    except (OSError, ValueError) as exc:
+        print(f"no se pudo leer {path}: {exc}", file=sys.stderr)
+        sys.exit(3)
     if not isinstance(data, dict):
-        data = {}
+        print(f"{path} no contiene un objeto JSON", file=sys.stderr)
+        sys.exit(3)
 prompt = data.get("prompt")
 if not isinstance(prompt, dict):
     prompt = {}
@@ -482,7 +484,12 @@ with open(path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2, ensure_ascii=False)
     fh.write("\n")
 PY
-  ok "opencode: prompt.paste = \"full\" en $CLI_JSON"
+  then
+    ok "opencode: prompt.paste = \"full\" en $CLI_JSON"
+  else
+    warn "no se modificó $CLI_JSON (JSON inválido o sin permisos)"
+    info "corrígelo a mano y pon: { \"prompt\": { \"paste\": \"full\" } }"
+  fi
 fi
 
 if [ "$DRY_RUN" -eq 0 ] && [ -x "$DICTADO_BIN" ]; then
