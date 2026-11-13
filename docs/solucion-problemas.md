@@ -96,8 +96,11 @@ configurarla.
 
 ### HTTP 429
 
-Has superado la cuota gratuita. Espera unos minutos o revisa los límites de tu
-cuenta. El programa reintenta una vez los errores temporales.
+Has superado la cuota gratuita. El programa respeta `Retry-After`, reintenta
+una vez los límites por minuto y no reintenta si la cuota diaria está agotada.
+Espera a que se reinicie la cuota (medianoche del Pacífico para el límite
+diario) o revisa los límites de tu cuenta en Google AI Studio. Algunos modelos
+del tier gratuito limitan, por ejemplo, a 25 peticiones diarias.
 
 ### «sin conexión»
 
@@ -117,6 +120,13 @@ export HTTPS_PROXY="http://tu-proxy:puerto"
 
 Sube `stt.timeout` en la configuración o usa una grabación más corta. En redes
 lentas, 90 segundos puede quedarse corto para audios muy largos.
+
+### «audio demasiado largo para enviarlo inline»
+
+El audio se envía dentro de la petición JSON. Por encima de unos 14 MB
+(aproximadamente 7-8 minutos de WAV mono a 16 kHz) se rechaza para no superar
+el límite de 20 MB de la API. Divide la grabación en partes más cortas o usa
+`dictado transcribe` con fragmentos separados.
 
 ### El audio queda en `pending/`
 

@@ -47,7 +47,7 @@ llm_min_sentences = 3
 llm_timeout = 45
 # Rango aceptable de longitud del texto pulido respecto al de reglas.
 # Fuera de este rango se descarta el pulido y se usa la limpieza por reglas.
-ratio_min = 0.55
+ratio_min = 0.70
 ratio_max = 1.35
 
 [insert]

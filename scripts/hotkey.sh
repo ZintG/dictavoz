@@ -68,7 +68,7 @@ to_x11_combo() {
 
 # Convierte <Control><Alt>d a Ctrl+Alt+D (formato de KDE)
 to_kde_combo() {
-  local raw="$1" out=""
+  local raw="$1" out="" last="" rest=""
   raw="${raw//<Control>/Ctrl+}"
   raw="${raw//<Alt>/Alt+}"
   raw="${raw//<Shift>/Shift+}"
@@ -76,8 +76,27 @@ to_kde_combo() {
   raw="${raw//<//}"; raw="${raw//>//}"
   raw="${raw#/}"; raw="${raw%/}"
   out="$raw"
-  # última letra en mayúscula
-  printf '%s' "${out%?}$(printf '%s' "${out: -1}" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$out" == *+* ]]; then
+    rest="${out%+*}"
+    last="${out##*+}"
+  else
+    last="$out"
+  fi
+  case "${last,,}" in
+    space)                    last="Space" ;;
+    return|enter)             last="Return" ;;
+    page_up|pageup|prior)     last="PageUp" ;;
+    page_down|pagedown|next)  last="PageDown" ;;
+    home|end|insert|delete|backspace|tab|escape|esc)
+      last="${last^}" ;;
+    f[0-9]*)                  last="${last^^}" ;;
+    *)                        last="${last^^}" ;;
+  esac
+  if [ -n "$rest" ]; then
+    printf '%s+%s' "$rest" "$last"
+  else
+    printf '%s' "$last"
+  fi
 }
 
 # --------------------------------------------------------------------------
@@ -275,11 +294,14 @@ kde_set_combo() {
   if command -v kwriteconfig6 >/dev/null 2>&1; then tool="kwriteconfig6"
   elif command -v kwriteconfig5 >/dev/null 2>&1; then tool="kwriteconfig5"
   else
-    warn "no se encontró kwriteconfig; asigna el atajo manualmente en Preferencias → Atajos"
-    return 0
+    err "no se encontró kwriteconfig; asigna el atajo manualmente en Preferencias → Atajos"
+    return 1
   fi
-  "$tool" --file kglobalshortcutsrc --group services --group dictado.desktop \
-    --key _launch "$combo,none,Dictado"
+  if ! "$tool" --file kglobalshortcutsrc --group services --group dictado.desktop \
+    --key _launch "$combo,none,Dictado"; then
+    err "no se pudo escribir el atajo en kglobalshortcutsrc"
+    return 1
+  fi
   ok "atajo $combo escrito en kglobalshortcutsrc"
   warn "si no se aplica, cierra sesión o revisa Preferencias → Atajos → Dictado"
 }
@@ -293,9 +315,16 @@ kde_status() {
   if [ -n "$tool" ]; then
     local value
     value="$("$tool" --file kglobalshortcutsrc --group services --group dictado.desktop --key _launch --print 2>/dev/null || true)"
-    ok "dictado.desktop → ${value:-sin atajo asignado}"
+    case "$value" in
+      ""|none|none,*)
+        err "dictado.desktop existe pero no tiene atajo asignado"
+        return 1
+        ;;
+    esac
+    ok "dictado.desktop → $value"
   else
-    ok "dictado.desktop existe"
+    err "no se encontró kwriteconfig; no se puede verificar el atajo"
+    return 1
   fi
 }
 
@@ -418,6 +447,7 @@ También puedes usar xbindkeys en cualquier X11:
     $DICTADO_BIN toggle
     Control+Alt+d
 EOF
+  return 1
 }
 
 # --------------------------------------------------------------------------

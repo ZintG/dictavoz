@@ -6,20 +6,27 @@ equipo, qué se guarda y cómo borrarlo.
 
 ## Qué se envía a internet
 
-Solo se hacen peticiones a:
+Solo se hacen peticiones al host configurado en `stt.api_base`, que por
+defecto es:
 
 ```text
 https://generativelanguage.googleapis.com
 ```
 
+Si cambias `api_base` por un proxy, la clave y el contenido también se envían
+a ese host.
+
 | Momento | Qué se envía | Qué se recibe |
 | --- | --- | --- |
 | Transcripción | Audio WAV en base64, idioma, modo y vocabulario | Texto transcrito |
 | Pulido (textos largos) | Texto ya limpio y las instrucciones del sistema | Texto pulido |
-| Diagnóstico (`doctor`) | Una petición mínima de prueba | Respuesta corta |
+| Diagnóstico (`doctor`) | Una petición mínima de texto y una consulta de metadatos del modelo | Respuesta corta y metadatos |
 
-No hay telemetría, analítica, publicidad ni servidores propios. El programa no
-envía el historial, la configuración ni la clave a ningún otro sitio.
+Las peticiones de transcripción y pulido envían `store: false`. Sin esa opción,
+la API de Interactions conserva las interacciones durante un día en el tier
+gratuito. No hay telemetría, analítica, publicidad ni servidores propios. El
+programa no envía el historial, la configuración ni la clave a ningún otro
+sitio distinto del host configurado.
 
 ### El plan gratuito
 

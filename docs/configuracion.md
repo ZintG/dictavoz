@@ -61,9 +61,14 @@ custom_vocabulary = ["opencode", "TypeScript", "API"]
 | `model` | `"gemini-3.5-transcribe"` | Modelo de transcripción. |
 | `language` | `"es-419"` | Idioma hablado en formato BCP-47. |
 | `mode` | `"smart"` | `smart` corrige y puntúa; `verbatim` transcribe literalmente. |
-| `api_base` | URL de Gemini | Solo cámbialo para proxies compatibles. |
+| `api_base` | URL de Gemini | Solo cámbialo para proxies compatibles. La clave y el audio se envían al host configurado. |
 | `timeout` | `90` | Segundos máximos de espera por petición. |
 | `custom_vocabulary` | `[]` | Términos que el modelo debe respetar. |
+
+El modo `verbatim` se normaliza internamente al objeto que espera la API. El
+audio se envía inline: por encima de unos 14 MB (aproximadamente 7-8 minutos
+de WAV mono a 16 kHz) se rechaza con un error claro para no superar el límite
+de la petición.
 
 ### Elegir el idioma
 
@@ -97,7 +102,7 @@ llm_model = "gemini-3.5-flash-lite"
 llm_min_chars = 280
 llm_min_sentences = 3
 llm_timeout = 45
-ratio_min = 0.55
+ratio_min = 0.70
 ratio_max = 1.35
 ```
 
@@ -109,7 +114,7 @@ ratio_max = 1.35
 | `llm_min_chars` | `280` | Longitud a partir de la cual se pule. |
 | `llm_min_sentences` | `3` | Frases a partir de las cuales se pule. |
 | `llm_timeout` | `45` | Segundos máximos para el pulido. |
-| `ratio_min` | `0.55` | Longitud mínima aceptable respecto al original. |
+| `ratio_min` | `0.70` | Longitud mínima aceptable respecto al original. |
 | `ratio_max` | `1.35` | Longitud máxima aceptable respecto al original. |
 
 El pulido se ejecuta si se supera **cualquiera** de los dos umbrales

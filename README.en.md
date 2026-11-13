@@ -147,6 +147,9 @@ never replacing it.
 ## Privacy
 
 - Audio is sent to the Gemini API for transcription.
+- Requests use `store: false` so the API does not retain the interaction.
+- Recordings longer than about 7-8 minutes are rejected because audio is sent
+  inline; split longer audio into shorter parts.
 - Dictated text is stored in `~/.local/state/dictado/history.jsonl` with mode
   `600`. You can disable or delete it.
 - Failed audio is kept for a few days in `~/.local/state/dictado/pending` and

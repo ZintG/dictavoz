@@ -157,6 +157,59 @@ export DICTADO_BIN="/opt/otra-herramienta/bin/app"
 bash "$HOTKEY" remove >/dev/null
 comprobar "remove deja la lista vacía" "@as []" "$(lista)"
 
+# 9. KDE convierte correctamente teclas con nombre
+mkdir -p "$TMP/kde-bin" "$TMP/kde-home"
+cat > "$TMP/kde-bin/kwriteconfig6" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FAKE_KDE_LOG:?}"
+if [[ " $* " == *" --print "* ]]; then
+  if [ "${FAKE_KDE_EMPTY:-0}" = "1" ]; then
+    exit 0
+  fi
+  printf '%s\n' "Ctrl+Shift+Space,none,Dictado"
+fi
+FAKE
+chmod +x "$TMP/kde-bin/kwriteconfig6"
+export HOME="$TMP/kde-home"
+export FAKE_KDE_LOG="$TMP/kde.log"
+export XDG_CURRENT_DESKTOP="KDE"
+export DESKTOP_SESSION="plasma"
+export DICTADO_BIN="$TMP/instalacion/bin/dictado"
+
+if PATH="$TMP/kde-bin:$PATH" bash "$HOTKEY" set "Ctrl+Shift+Space" >/dev/null; then
+  if grep -q 'Ctrl+Shift+Space' "$TMP/kde.log"; then
+    comprobar "KDE convierte Space" "0" "0"
+  else
+    comprobar "KDE convierte Space" "0" "1"
+  fi
+else
+  comprobar "KDE convierte Space" "0" "1"
+fi
+
+if PATH="$TMP/kde-bin:$PATH" bash "$HOTKEY" status >/dev/null 2>&1; then
+  comprobar "KDE status con binding" "0" "0"
+else
+  comprobar "KDE status con binding" "0" "1"
+fi
+
+if FAKE_KDE_EMPTY=1 PATH="$TMP/kde-bin:$PATH" bash "$HOTKEY" status >/dev/null 2>&1; then
+  comprobar "KDE status sin binding" "1" "0"
+else
+  comprobar "KDE status sin binding" "1" "1"
+fi
+
+# 10. Un escritorio sin soporte no debe fingir éxito
+mkdir -p "$TMP/min-bin"
+ln -s "$(command -v bash)" "$TMP/min-bin/bash"
+ln -s "$(command -v cat)" "$TMP/min-bin/cat"
+if env PATH="$TMP/min-bin" HOME="$TMP/kde-home" XDG_CURRENT_DESKTOP="MATE" \
+  DESKTOP_SESSION="mate" DICTADO_BIN="$TMP/instalacion/bin/dictado" \
+  "$(command -v bash)" "$HOTKEY" set "Ctrl+Alt+D" >/dev/null 2>&1; then
+  comprobar "manual_help devuelve error" "1" "0"
+else
+  comprobar "manual_help devuelve error" "1" "1"
+fi
+
 echo
 if [ "$fallos" -eq 0 ]; then
   echo "Todas las pruebas del atajo pasaron."

@@ -108,6 +108,10 @@ class CleanRulesTest(unittest.TestCase):
             "git status",
         )
 
+    def test_preserves_lines_in_lists(self):
+        result = self.clean("Lista:\n- uno\n- dos\n- tres")
+        self.assertIn("\n- uno\n- dos\n- tres", result)
+
     def test_short_text_keeps_lowercase_without_forced_period(self):
         self.assertEqual(self.clean("hola"), "Hola")
 

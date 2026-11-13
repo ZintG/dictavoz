@@ -131,6 +131,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ "$PURGE" -eq 1 ] && [ "$ACTION" != "uninstall" ]; then
+  die "--purge solo tiene sentido junto con --uninstall"
+fi
+
 PREFIX="${PREFIX/#\~/$HOME}"
 PREFIX="$(cd -- "$PREFIX" 2>/dev/null && pwd || printf '%s' "$PREFIX")"
 BIN_DIR="$PREFIX/bin"
@@ -382,7 +386,8 @@ if [ -n "$API_KEY" ]; then
     warn "GEMINI_API_KEY no tiene el formato esperado (AIza...); se ignora"
     API_KEY=""
   fi
-elif [ -s "$ENV_FILE" ] && grep -q '^GEMINI_API_KEY=' "$ENV_FILE"; then
+elif [ -s "$ENV_FILE" ] && grep -q '^GEMINI_API_KEY=.' "$ENV_FILE"; then
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
   ok "ya existe una clave en $ENV_FILE"
   KEY_VALID=1
 fi
@@ -444,6 +449,7 @@ fi
 step "Creando la configuración"
 
 if [ -f "$CONFIG_FILE" ]; then
+  chmod 600 "$CONFIG_FILE" 2>/dev/null || true
   ok "ya existe $CONFIG_FILE (no se sobrescribe)"
   info "para verla o editarla: dictado config show | dictado config edit"
 else
@@ -484,7 +490,8 @@ else
 
   if [ "$DRY_RUN" -eq 1 ]; then
     info "registraría $HOTKEY → $DICTADO_BIN toggle"
-  elif DICTADO_BIN="$DICTADO_BIN" bash "$LIB_DIR/hotkey.sh" set "$HOTKEY"; then
+  elif DICTADO_BIN="$DICTADO_BIN" bash "$LIB_DIR/hotkey.sh" set "$HOTKEY" \
+    && DICTADO_BIN="$DICTADO_BIN" bash "$LIB_DIR/hotkey.sh" status >/dev/null; then
     ok "atajo listo: pulsa $HOTKEY para empezar o parar de dictar"
   else
     warn "no se pudo registrar el atajo automáticamente"

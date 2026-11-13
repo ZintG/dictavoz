@@ -214,6 +214,9 @@ nunca la reemplaza.
 
 - El audio se envía a la API de Gemini para transcribirlo. No se guarda en
   ningún servidor propio.
+- Las peticiones usan `store: false` para que la API no retenga la interacción.
+- Las grabaciones de más de unos 7-8 minutos se rechazan porque el audio se
+  envía inline; divide el audio en partes más cortas.
 - El texto dictado se guarda en `~/.local/state/dictado/history.jsonl` con
   permisos `600`. Puedes desactivarlo o borrarlo cuando quieras.
 - Los audios que fallan se conservan unos días en

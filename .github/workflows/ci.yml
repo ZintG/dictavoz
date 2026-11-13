@@ -22,6 +22,10 @@ jobs:
             python: "3.11"
           - os: ubuntu-latest
             python: "3.12"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: ubuntu-latest
+            python: "3.14"
     steps:
       - uses: actions/checkout@v4
 
@@ -53,13 +57,19 @@ jobs:
       - name: Pruebas del gestor de atajos
         run: bash tests/test_hotkey.sh
 
+      - name: Simular instalación
+        run: |
+          home="$(mktemp -d)"
+          HOME="$home" ./install.sh --dry-run --non-interactive --no-deps \
+            --no-hotkey --no-opencode --prefix "$home/.local"
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Analizar scripts de shell
-        run: shellcheck -S warning install.sh uninstall.sh scripts/hotkey.sh scripts/check-secrets.sh
+        run: shellcheck -S warning install.sh uninstall.sh scripts/hotkey.sh scripts/check-secrets.sh tests/test_hotkey.sh
 
   secrets:
     name: Buscar secretos

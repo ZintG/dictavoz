@@ -79,7 +79,7 @@ suficiente para voz y mantiene el archivo pequeño: un minuto ronda 1,8 MB.
 silencio inicial y final. Si `ffmpeg` no está, se envía el audio completo.
 
 `audio_duration` consulta `ffprobe` y, si no está, calcula la duración a partir
-del tamaño del WAV.
+de la cabecera del WAV.
 
 ## Transcripción
 
@@ -92,18 +92,23 @@ x-goog-api-key: <clave>
 
 El audio se envía en línea, codificado en base64, junto con:
 
-- `mode`: `smart` o `verbatim`.
+- `store: false`, para no retener la interacción en la API.
+- `mode`: `smart` o `{"type": "verbatim"}`.
 - `language_codes`: el idioma configurado.
 - `custom_vocabulary`: los términos propios.
+
+El envío inline se rechaza si el WAV supera 14 MB (aproximadamente 7-8 minutos
+de audio mono a 16 kHz), para no llegar al límite de 20 MB de la petición.
 
 La respuesta se lee de `output_text`; si no está, se recorren los `steps` y se
 concatenan los fragmentos de texto.
 
 ### Reintentos
 
-`api_post` reintenta una vez los errores 429, 500, 502, 503 y 504, y los fallos
-de red. Los errores 400 y 403 no se reintentan: suelen indicar clave inválida o
-petición mal formada.
+`api_post` reintenta una vez los errores 500, 502, 503 y 504 y los fallos de
+red. Para 429 respeta `Retry-After`; si la espera supera un minuto, considera
+que la cuota diaria está agotada y no reintenta. Los errores 400 y 403 no se
+reintentan: suelen indicar clave inválida o petición mal formada.
 
 ### Mensajes de error
 
@@ -114,7 +119,7 @@ extrae el mensaje más útil sin volcar la respuesta completa.
 
 `clean_rules` es determinista y no depende de la red. Aplica, en orden:
 
-1. Colapsa espacios.
+1. Normaliza espacios dentro de cada línea y conserva los saltos de línea.
 2. Elimina muletillas duras («eh», «o sea», «este»).
 3. Elimina coletillas interrogativas («¿sabes?», «¿no?»).
 4. Elimina muletillas de cláusula conservando el corte de frase.
@@ -138,7 +143,10 @@ extrae el mensaje más útil sin volcar la respuesta completa.
 - quedan repeticiones evidentes.
 
 El modelo recibe un `system_instruction` que le prohíbe añadir información,
-responder al contenido o usar markdown. Devuelve solo el texto final.
+responder al contenido o usar markdown. Devuelve solo el texto final. La
+petición usa `store: false`, `thinking_level: "minimal"` y un límite de salida
+proporcional a la longitud del texto. Si la interacción no termina con estado
+`completed`, se descarta el pulido y se usa el texto de las reglas.
 
 `valid_polish` es la red de seguridad. Rechaza la respuesta si:
 
@@ -169,8 +177,9 @@ se muestra un aviso en el historial.
    texto antes de que la aplicación lo pegue.
 
 La restauración se hace con el subcomando oculto `_restore-clipboard`, que lee
-el texto guardado y lo vuelve a escribir tras unos milisegundos. Si el
-portapapeles anterior contenía datos binarios, se deja como estaba.
+el texto guardado y lo vuelve a escribir tras el retardo configurado en
+`paste_delay_ms` (con un mínimo de 1,5 s). Si el portapapeles anterior contenía
+datos binarios, se deja como estaba.
 
 ## Atajos
 
