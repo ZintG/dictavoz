@@ -20,7 +20,7 @@ test:
 	bash tests/test_hotkey.sh
 
 lint:
-	$(PYTHON) -m py_compile bin/dictado
+	$(PYTHON) -m py_compile bin/dictado scripts/opencode.py
 	bash -n install.sh
 	bash -n uninstall.sh
 	bash -n scripts/hotkey.sh

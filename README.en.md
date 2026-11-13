@@ -51,7 +51,8 @@ cd dictavoz
 ```
 
 The installer runs seven steps: system check, dependencies, files, API key,
-configuration, global hotkey, and opencode integration plus diagnostics.
+configuration, global hotkey, and opencode integration plus diagnostics. The
+opencode step only edits an existing `cli.json`; it never creates one.
 
 Options:
 
@@ -62,7 +63,7 @@ Options:
 --dry-run            show the plan without changing anything
 --no-deps            skip system packages
 --no-hotkey          skip the global shortcut
---no-opencode        leave opencode configuration untouched
+--no-opencode        leave opencode configuration untouched, even on uninstall
 --uninstall          remove the program, keep your data
 --purge              with --uninstall, also delete data and config
 ```
@@ -177,7 +178,8 @@ make lint           # Python and Bash syntax
 make check-secrets  # scan for keys and personal data
 ```
 
-Tests need no network or microphone.
+Tests need no network or microphone. They cover cleanup rules, polish
+validation and the opencode integration.
 
 ## Uninstall
 
@@ -185,6 +187,10 @@ Tests need no network or microphone.
 ./uninstall.sh            # remove program and hotkey, keep your data
 ./uninstall.sh --purge    # also delete configuration and history
 ```
+
+If the installer changed `prompt.paste` in opencode, uninstalling restores the
+previous value. Older installs did not save it, so the current value is kept
+and a notice is shown. Use `--no-opencode` to leave that configuration alone.
 
 ## License
 

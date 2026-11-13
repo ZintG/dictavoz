@@ -257,14 +257,18 @@ primero el archivo y después la variable.
 | `XDG_STATE_HOME` | Cambia la ubicación del historial. |
 | `XDG_RUNTIME_DIR` | Directorio del estado temporal de grabación. |
 
+`XDG_CONFIG_HOME` y `XDG_STATE_HOME` deben ser rutas absolutas. Si están
+vacías o contienen una ruta relativa, se usan `~/.config` y `~/.local/state`.
+
 ## Archivos que usa
 
 | Ruta | Contenido | Permisos |
 | --- | --- | --- |
-| `~/.config/dictado/config.toml` | Configuración | `600` |
-| `~/.config/dictado/env` | Clave de API | `600` |
-| `~/.local/state/dictado/history.jsonl` | Texto dictado | `600` |
-| `~/.local/state/dictado/pending/` | Audios fallidos | `700` |
+| `${XDG_CONFIG_HOME:-$HOME/.config}/dictado/config.toml` | Configuración | `600` |
+| `${XDG_CONFIG_HOME:-$HOME/.config}/dictado/env` | Clave de API | `600` |
+| `${XDG_CONFIG_HOME:-$HOME/.config}/dictado/opencode-backup.json` | Copia para revertir opencode | `600` |
+| `${XDG_STATE_HOME:-$HOME/.local/state}/dictado/history.jsonl` | Texto dictado | `600` |
+| `${XDG_STATE_HOME:-$HOME/.local/state}/dictado/pending/` | Audios fallidos | `700` |
 | `~/.local/bin/dictado` | Ejecutable | `755` |
 | `~/.local/lib/dictado/hotkey.sh` | Gestor de atajos | `755` |
 | `$XDG_RUNTIME_DIR/dictado/` | Estado de la grabación en curso | `700` |

@@ -4,6 +4,20 @@ Todas las versiones notables se documentan aquí. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [versionado semántico](https://semver.org/lang/es/).
 
+## [Unreleased]
+
+### Corregido
+
+- `dictado` y `doctor` respetan `XDG_CONFIG_HOME` y `XDG_STATE_HOME`, igual que
+  el instalador. Las rutas relativas se ignoran.
+- El instalador ya no crea la configuración de opencode ni su directorio:
+  solo modifica una configuración de opencode que ya exista.
+- Al desinstalar se restaura el `prompt.paste` anterior de opencode si el
+  instalador guardó una copia. Las instalaciones antiguas no tienen esa copia,
+  así que conservan el valor actual y muestran un aviso.
+- Si la configuración de opencode es inválida o `prompt` no es un objeto, se
+  deja intacta en lugar de sobrescribirla.
+
 ## [1.0.0] - 2026-11-13
 
 Primera versión pública.

@@ -340,7 +340,7 @@ dictado por SSH o desde un cron, no hay portapapeles que usar.
 ## opencode
 
 Si el texto se pega en opencode pero se pierde parte, revisa
-`~/.config/opencode/cli.json`:
+`${XDG_CONFIG_HOME:-~/.config}/opencode/cli.json`:
 
 ```json
 {
@@ -350,8 +350,11 @@ Si el texto se pega en opencode pero se pierde parte, revisa
 }
 ```
 
-El instalador lo configura si detecta opencode. Puedes hacerlo a mano o volver
-a ejecutar el instalador sin `--no-opencode`.
+El instalador solo modifica ese archivo si ya existe; no lo crea ni crea su
+directorio. Si no lo tienes, añade el fragmento a mano. Al desinstalar se
+restaura el valor anterior si el instalador guardó una copia; las instalaciones
+anteriores no la tienen y conservan el valor actual. Puedes omitir la
+integración con `--no-opencode`.
 
 ## La primera grabación tarda
 

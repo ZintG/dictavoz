@@ -14,7 +14,7 @@
 #   ./install.sh --dry-run              muestra lo que haría y sale
 #   ./install.sh --no-deps              no instala paquetes del sistema
 #   ./install.sh --no-hotkey            no configura el atajo global
-#   ./install.sh --no-opencode          no toca la configuración de opencode
+#   ./install.sh --no-opencode          no modifica ni revierte opencode
 #   ./install.sh --uninstall            desinstala (conserva tus datos)
 #   ./install.sh --uninstall --purge    desinstala y borra también tus datos
 #
@@ -54,6 +54,25 @@ warn()  { printf '  %s!%s %s\n' "$WARN" "$OFF" "$*"; }
 err()   { printf '  %s✗%s %s\n' "$ERR" "$OFF" "$*" >&2; }
 die()   { err "$*"; exit 1; }
 
+# Aplica o revierte la integración con opencode mostrando el resultado.
+# El helper devuelve 2 cuando no hay nada que hacer y 3 cuando es inseguro.
+run_opencode_helper() {
+  local output status
+  if output="$("$PYTHON" "$OPENCODE_HELPER" "$@" 2>&1)"; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      info "$output"
+    else
+      ok "$output"
+    fi
+  else
+    status=$?
+    case "$status" in
+      2) info "$output" ;;
+      *) warn "$output" ;;
+    esac
+  fi
+}
+
 # Ejecuta un comando como root si hace falta, respetando --dry-run.
 run_root() {
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -87,7 +106,7 @@ Uso:
   ./install.sh --dry-run              muestra lo que haría y sale
   ./install.sh --no-deps              no instala paquetes del sistema
   ./install.sh --no-hotkey            no configura el atajo global
-  ./install.sh --no-opencode          no toca la configuración de opencode
+  ./install.sh --no-opencode          no modifica ni revierte opencode
   ./install.sh --uninstall            desinstala (conserva tus datos)
   ./install.sh --uninstall --purge    desinstala y borra también tus datos
 EOF
@@ -117,10 +136,22 @@ PREFIX="$(cd -- "$PREFIX" 2>/dev/null && pwd || printf '%s' "$PREFIX")"
 BIN_DIR="$PREFIX/bin"
 LIB_DIR="$PREFIX/lib/dictado"
 DICTADO_BIN="$BIN_DIR/dictado"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dictado"
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+case "$CONFIG_HOME" in /*) ;; *) CONFIG_HOME="$HOME/.config" ;; esac
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+case "$STATE_HOME" in /*) ;; *) STATE_HOME="$HOME/.local/state" ;; esac
+
+CONFIG_DIR="$CONFIG_HOME/dictado"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
 ENV_FILE="$CONFIG_DIR/env"
-DATA_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dictado"
+DATA_DIR="$STATE_HOME/dictado"
+CLI_JSON="$CONFIG_HOME/opencode/cli.json"
+OPENCODE_BACKUP="$CONFIG_DIR/opencode-backup.json"
+OPENCODE_HELPER="$REPO_DIR/scripts/opencode.py"
+
+# Disponible también durante la desinstalación, que ocurre antes del paso 1.
+PYTHON="${PYTHON:-$(command -v python3 || true)}"
 
 # --------------------------------------------------------------------------
 # Desinstalación
@@ -128,6 +159,21 @@ DATA_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dictado"
 
 if [ "$ACTION" = "uninstall" ]; then
   printf '%sDesinstalando dictado %s%s\n' "$BOLD" "$VERSION" "$OFF"
+
+  if [ "$WITH_OPENCODE" -eq 1 ]; then
+    if [ -n "$PYTHON" ] && [ -f "$OPENCODE_HELPER" ]; then
+      opencode_args=(revert "$OPENCODE_BACKUP")
+      if [ "$DRY_RUN" -eq 1 ]; then opencode_args+=(--dry-run); fi
+      run_opencode_helper "${opencode_args[@]}"
+    else
+      info "no se revierte opencode (falta python3 o scripts/opencode.py)"
+    fi
+  else
+    info "opencode: se conserva la configuración (--no-opencode)"
+    if [ "$PURGE" -eq 1 ]; then
+      warn "con --purge también se borrará la copia de opencode"
+    fi
+  fi
 
   if [ -f "$LIB_DIR/hotkey.sh" ] && [ "$WITH_HOTKEY" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
     DICTADO_BIN="$DICTADO_BIN" bash "$LIB_DIR/hotkey.sh" remove 2>/dev/null || true
@@ -175,7 +221,7 @@ if [ "$(id -u)" -eq 0 ]; then
   warn "estás ejecutando como root; la instalación irá a $PREFIX"
 fi
 
-PYTHON="$(command -v python3 || true)"
+PYTHON="${PYTHON:-$(command -v python3 || true)}"
 [ -n "$PYTHON" ] || die "falta python3; instálalo y vuelve a intentarlo"
 PY_VERSION="$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 ok "Python $PY_VERSION en $PYTHON"
@@ -452,44 +498,17 @@ fi
 
 step "Integración con opencode y diagnóstico"
 
-CLI_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/cli.json"
 if [ "$WITH_OPENCODE" -eq 0 ]; then
   info "omitido (--no-opencode)"
-elif ! command -v opencode >/dev/null 2>&1 && [ ! -f "$CLI_JSON" ]; then
-  info "opencode no detectado; se omite"
-elif [ "$DRY_RUN" -eq 1 ]; then
-  info "pondría prompt.paste = \"full\" en $CLI_JSON"
+elif [ ! -f "$CLI_JSON" ]; then
+  info "opencode sin configuración; no se crea ($CLI_JSON)"
+  info "si quieres integrarlo, añade a mano: { \"prompt\": { \"paste\": \"full\" } }"
+elif [ ! -f "$OPENCODE_HELPER" ] || [ -z "$PYTHON" ]; then
+  warn "no se modificó opencode (falta python3 o scripts/opencode.py)"
 else
-  mkdir -p "$(dirname "$CLI_JSON")"
-  if "$PYTHON" - "$CLI_JSON" <<'PY'
-import json, os, sys
-path = sys.argv[1]
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError) as exc:
-        print(f"no se pudo leer {path}: {exc}", file=sys.stderr)
-        sys.exit(3)
-    if not isinstance(data, dict):
-        print(f"{path} no contiene un objeto JSON", file=sys.stderr)
-        sys.exit(3)
-prompt = data.get("prompt")
-if not isinstance(prompt, dict):
-    prompt = {}
-prompt["paste"] = "full"
-data["prompt"] = prompt
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2, ensure_ascii=False)
-    fh.write("\n")
-PY
-  then
-    ok "opencode: prompt.paste = \"full\" en $CLI_JSON"
-  else
-    warn "no se modificó $CLI_JSON (JSON inválido o sin permisos)"
-    info "corrígelo a mano y pon: { \"prompt\": { \"paste\": \"full\" } }"
-  fi
+  opencode_args=(apply "$CLI_JSON" "$OPENCODE_BACKUP")
+  if [ "$DRY_RUN" -eq 1 ]; then opencode_args+=(--dry-run); fi
+  run_opencode_helper "${opencode_args[@]}"
 fi
 
 if [ "$DRY_RUN" -eq 0 ] && [ -x "$DICTADO_BIN" ]; then

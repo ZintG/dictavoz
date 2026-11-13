@@ -46,8 +46,10 @@ lo que va a hacer:
    sin sobrescribir una configuración existente.
 6. **Atajo**: te propone `Ctrl+Alt+D`, te permite cambiarlo y lo registra con
    la interfaz nativa del escritorio.
-7. **Integración**: configura `prompt.paste = "full"` en opencode si lo
-   detecta y ejecuta `dictado doctor`.
+7. **Integración**: si ya existe la configuración de opencode
+   (`${XDG_CONFIG_HOME:-~/.config}/opencode/cli.json`), ajusta
+   `prompt.paste = "full"` para que opencode no pierda parte del texto dictado.
+   Nunca crea ese archivo ni su directorio. Después ejecuta `dictado doctor`.
 
 ## Dependencias por distribución
 
@@ -232,6 +234,13 @@ dictado config show
 
 Quita el ejecutable, el gestor de atajos y la entrada del atajo. Conserva la
 configuración y el historial por si vuelves a instalarlo.
+
+Si el instalador modificó `prompt.paste` en opencode, también restaura el valor
+anterior. Para ello guarda una copia en
+`${XDG_CONFIG_HOME:-~/.config}/dictado/opencode-backup.json` antes de tocarlo.
+Las instalaciones anteriores a este cambio no tienen esa copia: en ese caso se
+conserva el valor actual y se muestra un aviso. Añade `--no-opencode` si
+prefieres no tocar la configuración de opencode.
 
 Para borrarlo todo:
 

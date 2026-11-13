@@ -76,7 +76,9 @@ El instalador hace siete pasos y te va contando lo que ocurre:
 5. Crea `~/.config/dictado/config.toml` si no existe.
 6. Te pregunta la combinación del atajo (por defecto `Ctrl+Alt+D`) y la
    registra.
-7. Configura la integración con opencode y ejecuta el diagnóstico.
+7. Si ya existe una configuración de opencode, ajusta `prompt.paste` para que
+   no se pierda el texto dictado; nunca crea el archivo. Después ejecuta el
+   diagnóstico.
 
 Al terminar, pulsa `Ctrl+Alt+D` y habla.
 
@@ -89,7 +91,7 @@ Al terminar, pulsa `Ctrl+Alt+D` y habla.
 --dry-run            muestra lo que haría sin tocar nada
 --no-deps            no instala paquetes del sistema
 --no-hotkey          no configura el atajo global
---no-opencode        no modifica la configuración de opencode
+--no-opencode        no modifica ni revierte la configuración de opencode
 --uninstall          desinstala y conserva tus datos
 --purge              con --uninstall, borra también configuración e historial
 ```
@@ -256,8 +258,8 @@ make lint           # sintaxis de Python y Bash
 make check-secrets  # busca claves y datos personales
 ```
 
-No hace falta red ni micrófono para las pruebas: cubren la limpieza por reglas
-y la validación del pulido.
+No hace falta red ni micrófono para las pruebas: cubren la limpieza por reglas,
+la validación del pulido y la integración con opencode.
 
 ## Desinstalar
 
@@ -265,6 +267,11 @@ y la validación del pulido.
 ./uninstall.sh            # quita el programa y el atajo, conserva tus datos
 ./uninstall.sh --purge    # borra también configuración e historial
 ```
+
+Si el instalador había cambiado `prompt.paste` en opencode, la desinstalación
+restaura el valor anterior. Las instalaciones antiguas no guardaban ese valor,
+así que en ese caso se conserva el actual y se avisa. Usa `--no-opencode` si
+prefieres no tocar esa configuración.
 
 ## Licencia
 

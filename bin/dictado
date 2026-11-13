@@ -44,13 +44,31 @@ APP = "Dictado"
 NOTIFY_ID = 9911
 
 HOME = Path.home()
-CONFIG_DIR = HOME / ".config" / "dictado"
+
+
+def xdg_config_home() -> Path:
+    """Devuelve XDG_CONFIG_HOME si es absoluto; si no, ~/.config."""
+    value = os.environ.get("XDG_CONFIG_HOME", "")
+    if value and os.path.isabs(value):
+        return Path(value)
+    return HOME / ".config"
+
+
+def xdg_state_home() -> Path:
+    """Devuelve XDG_STATE_HOME si es absoluto; si no, ~/.local/state."""
+    value = os.environ.get("XDG_STATE_HOME", "")
+    if value and os.path.isabs(value):
+        return Path(value)
+    return HOME / ".local" / "state"
+
+
+CONFIG_DIR = xdg_config_home() / "dictado"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 ENV_FILE = CONFIG_DIR / "env"
 STATE_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/dictado-{os.getuid()}") / "dictado"
 STATE_FILE = STATE_DIR / "state.json"
 LOG_FILE = STATE_DIR / "arecord.log"
-DATA_DIR = HOME / ".local" / "state" / "dictado"
+DATA_DIR = xdg_state_home() / "dictado"
 HISTORY_FILE = DATA_DIR / "history.jsonl"
 PENDING_DIR = DATA_DIR / "pending"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1198,11 +1216,12 @@ def cmd_doctor(cfg: dict) -> int:
         check("atajo de teclado", False, "no se encontró hotkey.sh", warn=True)
 
     # opencode paste
-    cli_json = HOME / ".config" / "opencode" / "cli.json"
+    cli_json = xdg_config_home() / "opencode" / "cli.json"
     if cli_json.exists():
         try:
             data = json.loads(cli_json.read_text(encoding="utf-8"))
-            paste = (data.get("prompt") or {}).get("paste")
+            prompt = data.get("prompt") if isinstance(data, dict) else None
+            paste = prompt.get("paste") if isinstance(prompt, dict) else None
             check("opencode prompt.paste", paste == "full", str(paste or "no definido"))
         except (OSError, ValueError) as exc:
             check("opencode prompt.paste", False, str(exc))
