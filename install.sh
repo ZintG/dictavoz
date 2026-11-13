@@ -266,11 +266,11 @@ if [ "$WITH_DEPS" -eq 0 ]; then
 else
   BASE_PKGS=()
   case "$PM" in
-    apt)    BASE_PKGS=(alsa-utils ffmpeg xclip xdotool libnotify-bin) ;;
-    dnf)    BASE_PKGS=(alsa-utils ffmpeg xclip xdotool libnotify) ;;
-    pacman) BASE_PKGS=(alsa-utils ffmpeg xclip xdotool libnotify) ;;
-    zypper) BASE_PKGS=(alsa-utils ffmpeg xclip xdotool libnotify-tools) ;;
-    apk)    BASE_PKGS=(alsa-utils ffmpeg xclip xdotool libnotify) ;;
+    apt)    BASE_PKGS=(alsa-utils ffmpeg x11-utils xclip xdotool libnotify-bin) ;;
+    dnf)    BASE_PKGS=(alsa-utils ffmpeg xprop xclip xdotool libnotify) ;;
+    pacman) BASE_PKGS=(alsa-utils ffmpeg xorg-xprop xclip xdotool libnotify) ;;
+    zypper) BASE_PKGS=(alsa-utils ffmpeg xprop xclip xdotool libnotify-tools) ;;
+    apk)    BASE_PKGS=(alsa-utils ffmpeg xprop xclip xdotool libnotify) ;;
   esac
 
   if [ "$SESSION" = "wayland" ]; then

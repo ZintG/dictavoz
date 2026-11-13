@@ -1116,10 +1116,16 @@ def cmd_doctor(cfg: dict) -> int:
 
     required = ["arecord", "notify-send"]
     optional = ["ffmpeg", "ffprobe"]
+    optional_detail = {
+        "ffmpeg": "opcional: sin él no se recorta el silencio",
+        "ffprobe": "opcional: sin él no se recorta el silencio",
+        "xprop": "opcional: sin él no se distinguen terminales",
+    }
     if wayland:
         required += ["wl-copy", "wl-paste"]
     else:
         required += ["xclip", "xdotool"]
+        optional += ["xprop"]
 
     for binary in required:
         path = which(binary)
@@ -1127,7 +1133,7 @@ def cmd_doctor(cfg: dict) -> int:
     for binary in optional:
         path = which(binary)
         check(f"binario {binary}", bool(path),
-              path or "opcional: sin él no se recorta el silencio", warn=True)
+              path or optional_detail[binary], warn=True)
 
     # Micrófono
     try:
