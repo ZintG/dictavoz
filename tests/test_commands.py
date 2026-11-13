@@ -105,6 +105,9 @@ class PurgeTest(unittest.TestCase):
         self.state_dir = self.dir / "state"
         self.pending = self.dir / "pending"
         self.history = self.dir / "history.jsonl"
+        self.config_dir = self.dir / "config"
+        self.config_dir.mkdir()
+        (self.config_dir / "config.toml").write_text("config", encoding="utf-8")
         self.state_dir.mkdir()
         (self.state_dir / "state.json").write_text("{}", encoding="utf-8")
         (self.state_dir / "arecord.log").write_text("log", encoding="utf-8")
@@ -112,25 +115,40 @@ class PurgeTest(unittest.TestCase):
         (self.pending / "old.wav").write_bytes(b"audio")
         self.history.write_text("{}\n", encoding="utf-8")
 
-    def run_purge(self, active: dict | None):
+    def run_purge(self, active: dict | None, purge_all: bool = False):
         output = io.StringIO()
+        errors = io.StringIO()
         with mock.patch.object(dictado, "STATE_DIR", self.state_dir), \
                 mock.patch.object(dictado, "PENDING_DIR", self.pending), \
                 mock.patch.object(dictado, "HISTORY_FILE", self.history), \
+                mock.patch.object(dictado, "CONFIG_DIR", self.config_dir), \
                 mock.patch.object(dictado, "recording_state", return_value=active), \
-                redirect_stdout(output):
-            code = dictado.cmd_purge(False, True)
-        return code, output.getvalue()
+                redirect_stdout(output), redirect_stderr(errors):
+            code = dictado.cmd_purge(purge_all, True)
+        return code, output.getvalue() + errors.getvalue()
 
-    def test_keeps_state_dir_during_an_active_recording(self) -> None:
+    def test_refuses_purge_during_an_active_recording(self) -> None:
         code, output = self.run_purge({"pid": 1234, "wav": "rec.wav"})
 
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)
         self.assertIn("grabación en curso", output)
+        self.assertIn("dictado stop", output)
         self.assertTrue((self.state_dir / "state.json").exists())
         self.assertTrue((self.state_dir / "arecord.log").exists())
-        self.assertFalse((self.pending / "old.wav").exists())
-        self.assertFalse(self.history.exists())
+        self.assertTrue((self.pending / "old.wav").exists())
+        self.assertTrue(self.history.exists())
+
+    def test_refuses_purge_all_during_an_active_recording(self) -> None:
+        code, output = self.run_purge({"pid": 1234, "wav": "rec.wav"}, purge_all=True)
+
+        self.assertEqual(code, 1)
+        self.assertIn("grabación en curso", output)
+        self.assertIn("dictado stop", output)
+        self.assertTrue((self.config_dir / "config.toml").exists())
+        self.assertTrue((self.state_dir / "state.json").exists())
+        self.assertTrue((self.state_dir / "arecord.log").exists())
+        self.assertTrue((self.pending / "old.wav").exists())
+        self.assertTrue(self.history.exists())
 
     def test_clears_state_dir_without_an_active_recording(self) -> None:
         code, output = self.run_purge(None)
@@ -141,6 +159,7 @@ class PurgeTest(unittest.TestCase):
         self.assertFalse((self.state_dir / "arecord.log").exists())
         self.assertFalse((self.pending / "old.wav").exists())
         self.assertFalse(self.history.exists())
+        self.assertTrue((self.config_dir / "config.toml").exists())
 
 
 if __name__ == "__main__":

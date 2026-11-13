@@ -1376,6 +1376,13 @@ def cmd_config(action: str, cfg: dict) -> int:
 
 
 def cmd_purge(purge_all: bool, assume_yes: bool) -> int:
+    if recording_state():
+        print(
+            "hay una grabación en curso: párala primero con dictado stop",
+            file=sys.stderr,
+        )
+        return 1
+
     scope = "configuración, historial y audio" if purge_all else "historial y audio pendiente"
     if not assume_yes:
         try:
@@ -1387,12 +1394,6 @@ def cmd_purge(purge_all: bool, assume_yes: bool) -> int:
             return 1
 
     removed = 0
-    active = recording_state() if not purge_all else None
-    if active:
-        print("hay una grabación en curso: no se borra el estado temporal")
-    directories = [PENDING_DIR]
-    if not active:
-        directories.append(STATE_DIR)
     if purge_all:
         if CONFIG_DIR.exists():
             shutil.rmtree(CONFIG_DIR, ignore_errors=True)
@@ -1404,7 +1405,7 @@ def cmd_purge(purge_all: bool, assume_yes: bool) -> int:
                 removed += 1
             except OSError:
                 pass
-    for directory in directories:
+    for directory in (PENDING_DIR, STATE_DIR):
         if directory.exists():
             for path in directory.iterdir():
                 try:
