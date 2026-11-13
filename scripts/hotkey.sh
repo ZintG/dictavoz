@@ -12,7 +12,6 @@
 #
 set -euo pipefail
 
-APP="dictado"
 DEFAULT_COMBO="<Control><Alt>d"
 DICTADO_BIN="${DICTADO_BIN:-$(command -v dictado 2>/dev/null || echo "$HOME/.local/bin/dictado")}"
 
