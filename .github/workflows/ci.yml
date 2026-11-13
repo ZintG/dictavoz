@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python }} en ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Instalar dependencias de prueba
+        run: |
+          python -m pip install --upgrade pip
+          if python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+            echo "tomllib incluido en la biblioteca estándar"
+          else
+            python -m pip install tomli
+          fi
+
+      - name: Comprobar sintaxis
+        run: |
+          python -m py_compile bin/dictado
+          bash -n install.sh
+          bash -n uninstall.sh
+          bash -n scripts/hotkey.sh
+          bash -n scripts/check-secrets.sh
+          bash -n tests/test_hotkey.sh
+
+      - name: Pruebas unitarias
+        run: python -m unittest discover -s tests -v
+
+      - name: Pruebas del gestor de atajos
+        run: bash tests/test_hotkey.sh
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analizar scripts de shell
+        run: shellcheck -S warning install.sh uninstall.sh scripts/hotkey.sh scripts/check-secrets.sh
+
+  secrets:
+    name: Buscar secretos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Revisar el árbol versionado
+        run: bash scripts/check-secrets.sh

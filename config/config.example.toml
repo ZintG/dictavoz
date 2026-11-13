@@ -1,0 +1,73 @@
+# Configuración de dictado por voz
+#
+# Copia este archivo en ~/.config/dictado/config.toml y ajústalo a tu gusto.
+# Los cambios se aplican en el siguiente dictado, sin reiniciar nada.
+# La clave de API NO va aquí: vive en ~/.config/dictado/env (chmod 600).
+
+[audio]
+# Dispositivo de captura de ALSA. "default" usa el predeterminado del sistema.
+# Comprueba los disponibles con: arecord -l
+device = "default"
+rate = 16000
+channels = 1
+# Grabaciones más cortas que esto se descartan.
+min_duration = 0.4
+# Recorte de silencio al principio y al final (requiere ffmpeg).
+silence_threshold = "-45dB"
+silence_start_duration = 0.1
+silence_stop_duration = 0.4
+
+[stt]
+# En esta versión solo existe el backend "gemini".
+backend = "gemini"
+model = "gemini-3.5-transcribe"
+# Código BCP-47 del idioma hablado. Ejemplos: "es-419", "es-ES", "en-US".
+language = "es-419"
+# "smart" puntúa y corrige; "verbatim" transcribe tal cual.
+mode = "smart"
+api_base = "https://generativelanguage.googleapis.com/v1beta"
+timeout = 90
+# Términos que el reconocimiento debe respetar. Ayuda con nombres propios,
+# siglas y jerga técnica. Recomendado: menos de 100 entradas.
+custom_vocabulary = [
+  "opencode", "TypeScript", "JavaScript", "Python", "Linux",
+  "arecord", "xdotool", "xclip", "ffmpeg", "Gemini",
+  "API", "JSON", "TOML", "commit", "pull request",
+]
+
+[cleanup]
+# Limpieza determinista: muletillas, puntuación, mayúsculas, espacios.
+rules = true
+# Pulido opcional con un modelo de lenguaje para textos largos.
+llm = true
+llm_model = "gemini-3.5-flash-lite"
+# El pulido solo se ejecuta si el texto supera alguno de estos umbrales.
+llm_min_chars = 280
+llm_min_sentences = 3
+llm_timeout = 45
+# Rango aceptable de longitud del texto pulido respecto al de reglas.
+# Fuera de este rango se descarta el pulido y se usa la limpieza por reglas.
+ratio_min = 0.55
+ratio_max = 1.35
+
+[insert]
+# "" autodetecta el atajo de pegado según la ventana activa.
+# Valores posibles: "ctrl+v", "ctrl+shift+v" o "type" (escribe carácter a carácter).
+key = ""
+# Espera antes de enviar el atajo, para dar tiempo al portapapeles.
+paste_delay_ms = 150
+# Restaurar el contenido anterior del portapapeles tras pegar.
+restore_clipboard = true
+
+[history]
+# Guarda cada dictado en ~/.local/state/dictado/history.jsonl (chmod 600).
+# Contiene el texto dictado: desactívalo si no quieres ese registro.
+enabled = true
+# Número máximo de entradas; las más antiguas se descartan.
+max_entries = 500
+# Días que se conservan los audios que fallaron, para reintentar a mano.
+pending_days = 7
+
+[notify]
+# Notificaciones de escritorio al empezar, transcribir y terminar.
+enabled = true

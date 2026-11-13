@@ -1,0 +1,1482 @@
+#!/usr/bin/env python3
+"""
+dictado — dictado por voz global para Linux, con limpieza automática.
+
+Graba con arecord, transcribe con Gemini (modo smart), limpia con reglas
+locales y, en textos largos, con un LLM. Después copia al portapapeles y
+pega en la ventana que estaba activa al empezar.
+
+Uso:
+    dictado toggle               empieza o para según el estado
+    dictado start|stop           control manual
+    dictado status               estado actual
+    dictado doctor               diagnóstico del entorno
+    dictado config path|show|edit|set-key
+    dictado hotkey set|status|remove
+    dictado clean --text "..."   probar la limpieza
+    dictado clean --file x.txt   probar la limpieza desde archivo
+    dictado transcribe x.wav     probar solo la transcripción
+    dictado history [-n 10]      últimos dictados
+    dictado purge [--all]        borrar historial y audio pendiente
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import getpass
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+__version__ = "1.0.0"
+
+APP = "Dictado"
+NOTIFY_ID = 9911
+
+HOME = Path.home()
+CONFIG_DIR = HOME / ".config" / "dictado"
+CONFIG_FILE = CONFIG_DIR / "config.toml"
+ENV_FILE = CONFIG_DIR / "env"
+STATE_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/dictado-{os.getuid()}") / "dictado"
+STATE_FILE = STATE_DIR / "state.json"
+LOG_FILE = STATE_DIR / "arecord.log"
+DATA_DIR = HOME / ".local" / "state" / "dictado"
+HISTORY_FILE = DATA_DIR / "history.jsonl"
+PENDING_DIR = DATA_DIR / "pending"
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def hotkey_script() -> Path | None:
+    """Localiza hotkey.sh tanto en el repo como en la instalación."""
+    candidates: list[Path] = []
+    override = os.environ.get("DICTADO_HOTKEY_SCRIPT")
+    if override:
+        candidates.append(Path(override))
+    candidates += [
+        SCRIPT_DIR.parent / "lib" / "dictado" / "hotkey.sh",
+        SCRIPT_DIR.parent / "scripts" / "hotkey.sh",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def self_path() -> str:
+    """Ruta absoluta de este ejecutable, para registrar el atajo correcto."""
+    return os.path.abspath(sys.argv[0])
+
+
+# --------------------------------------------------------------------------
+# Errores y utilidades
+# --------------------------------------------------------------------------
+
+class DictadoError(Exception):
+    pass
+
+
+def load_env() -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not ENV_FILE.exists():
+        return values
+    for line in ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+    return values
+
+
+DEFAULTS = {
+    "audio": {
+        "device": "default",
+        "rate": 16000,
+        "channels": 1,
+        "min_duration": 0.4,
+        "silence_threshold": "-45dB",
+        "silence_start_duration": 0.1,
+        "silence_stop_duration": 0.4,
+    },
+    "stt": {
+        "backend": "gemini",
+        "model": "gemini-3.5-transcribe",
+        "language": "es-419",
+        "mode": "smart",
+        "api_base": "https://generativelanguage.googleapis.com/v1beta",
+        "timeout": 90,
+        "custom_vocabulary": [],
+    },
+    "cleanup": {
+        "rules": True,
+        "llm": True,
+        "llm_model": "gemini-3.5-flash-lite",
+        "llm_min_chars": 280,
+        "llm_min_sentences": 3,
+        "llm_timeout": 45,
+        "ratio_min": 0.55,
+        "ratio_max": 1.35,
+    },
+    "insert": {
+        "key": "",
+        "paste_delay_ms": 150,
+        "restore_clipboard": True,
+    },
+    "history": {
+        "enabled": True,
+        "max_entries": 500,
+        "pending_days": 7,
+    },
+    "notify": {"enabled": True},
+}
+
+
+def deep_merge(base: dict, override: dict) -> dict:
+    out = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _load_toml(path: Path) -> dict:
+    """Carga TOML con tomllib (3.11+) o tomli en sistemas más antiguos."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ModuleNotFoundError as exc:
+            raise DictadoError(
+                "este sistema necesita Python 3.11+ o el paquete python3-tomli"
+            ) from exc
+    try:
+        with path.open("rb") as fh:
+            return tomllib.load(fh)
+    except (OSError, ValueError) as exc:
+        raise DictadoError(f"config.toml inválido: {exc}") from exc
+
+
+def load_config() -> dict:
+    cfg = DEFAULTS
+    if CONFIG_FILE.exists():
+        cfg = deep_merge(DEFAULTS, _load_toml(CONFIG_FILE))
+    return cfg
+
+
+def notify(summary: str, body: str = "", urgency: str = "normal", enabled: bool = True) -> None:
+    if not enabled:
+        return
+    try:
+        subprocess.run(
+            ["notify-send", "-a", APP, "-u", urgency, "-r", str(NOTIFY_ID),
+             "-t", "5000", summary, body],
+            check=False,
+            timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def which(name: str) -> str | None:
+    return shutil.which(name)
+
+
+def run(cmd: list[str], timeout: float = 30, check: bool = False,
+        env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=check,
+        env=env,
+    )
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, ValueError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def read_state() -> dict | None:
+    try:
+        with STATE_FILE.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def secure_mkdir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def secure_file(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def write_state(data: dict) -> None:
+    secure_mkdir(STATE_DIR)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    secure_file(tmp)
+    os.replace(tmp, STATE_FILE)
+    secure_file(STATE_FILE)
+
+
+def clear_state() -> None:
+    try:
+        STATE_FILE.unlink()
+    except OSError:
+        pass
+
+
+def recording_state() -> dict | None:
+    """Devuelve el estado solo si arecord sigue vivo y es realmente arecord."""
+    state = read_state()
+    if not state:
+        return None
+    pid = state.get("pid")
+    if not isinstance(pid, int) or not pid_alive(pid):
+        clear_state()
+        return None
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        clear_state()
+        return None
+    if "arecord" not in cmdline:
+        clear_state()
+        return None
+    return state
+
+
+# --------------------------------------------------------------------------
+# Ventana activa y portapapeles
+# --------------------------------------------------------------------------
+
+TERMINALS = {
+    "gnome-terminal", "gnome-terminal-server", "xterm", "uxterm", "konsole",
+    "tilix", "alacritty", "kitty", "wezterm", "terminator", "xfce4-terminal",
+    "mate-terminal", "lxterminal", "sakura", "st", "urxvt", "rxvt",
+}
+
+
+def is_wayland() -> bool:
+    return (os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+            or bool(os.environ.get("WAYLAND_DISPLAY")))
+
+
+def active_window() -> str | None:
+    if is_wayland():
+        return None
+    try:
+        proc = run(["xdotool", "getactivewindow"], timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    wid = proc.stdout.strip()
+    return wid or None
+
+
+def window_class(wid: str | None) -> str:
+    if not wid:
+        return ""
+    # Esta versión de xdotool no siempre trae getwindowclassname; xprop sí.
+    try:
+        proc = run(["xprop", "-id", wid, "WM_CLASS"], timeout=5)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip().lower()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc = run(["xdotool", "getwindowclassname", wid], timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip().lower() if proc.returncode == 0 else ""
+
+
+def window_alive(wid: str | None) -> bool:
+    if not wid:
+        return False
+    try:
+        proc = run(["xdotool", "getwindowname", wid], timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def detect_paste_key(wid: str | None) -> str:
+    cls = window_class(wid)
+    if any(t in cls for t in TERMINALS):
+        return "ctrl+shift+v"
+    return "ctrl+v"
+
+
+def get_clipboard() -> str:
+    try:
+        if is_wayland() and which("wl-paste"):
+            proc = subprocess.run(
+                ["wl-paste", "--no-newline", "--type", "text"],
+                capture_output=True, timeout=5,
+            )
+        else:
+            proc = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-o"],
+                capture_output=True, timeout=5,
+            )
+        if proc.returncode != 0:
+            return ""
+        text = proc.stdout.decode("utf-8", "replace")
+        # No intentar restaurar contenido binario (imágenes, etc.)
+        return "" if "\x00" in text else text
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def set_clipboard(text: str) -> bool:
+    try:
+        if is_wayland() and which("wl-copy"):
+            subprocess.run(
+                ["wl-copy", "--type", "text/plain"],
+                input=text.encode("utf-8"),
+                timeout=5, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.run(
+                ["xclip", "-selection", "clipboard", "-in"],
+                input=text.encode("utf-8"),
+                timeout=5, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def restore_clipboard_later(text: str) -> None:
+    """Restaura el portapapeles en un proceso aparte, para no pisar el pegado."""
+    if not text:
+        return
+    try:
+        secure_mkdir(STATE_DIR)
+        path = STATE_DIR / f"clipboard-{os.getpid()}.txt"
+        path.write_text(text, encoding="utf-8")
+        secure_file(path)
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "_restore-clipboard", str(path)],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------------
+# Grabación
+# --------------------------------------------------------------------------
+
+def cmd_start(cfg: dict) -> int:
+    state = recording_state()
+    if state:
+        notify("🎙️ Ya está grabando", "Pulsa de nuevo para parar.", enabled=cfg["notify"]["enabled"])
+        return 0
+
+    if not which("arecord"):
+        raise DictadoError("falta arecord (paquete alsa-utils)")
+
+    secure_mkdir(STATE_DIR)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    wav = STATE_DIR / f"rec-{stamp}.wav"
+    audio = cfg["audio"]
+    log = LOG_FILE.open("ab")
+    secure_file(LOG_FILE)
+    cmd = [
+        "arecord", "-q",
+        "-D", str(audio["device"]),
+        "-f", "S16_LE",
+        "-r", str(int(audio["rate"])),
+        "-c", str(int(audio["channels"])),
+        "-t", "wav",
+        str(wav),
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=log, stderr=log,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        log.close()
+        raise DictadoError(f"no se pudo iniciar arecord: {exc}") from exc
+    finally:
+        log.close()
+
+    # Dar un instante a arecord para fallar pronto si el dispositivo no existe.
+    time.sleep(0.25)
+    if proc.poll() is not None:
+        raise DictadoError("arecord terminó al arrancar; revisa el micrófono con: arecord -l")
+
+    wid = active_window()
+    write_state({
+        "pid": proc.pid,
+        "wav": str(wav),
+        "started": time.time(),
+        "window": wid,
+        "window_class": window_class(wid),
+    })
+    notify("🎙️ Grabando…", "Pulsa Ctrl+Alt+D para parar.", enabled=cfg["notify"]["enabled"])
+    return 0
+
+
+def cmd_stop(cfg: dict) -> int:
+    state = recording_state()
+    if not state:
+        notify("No hay grabación activa", enabled=cfg["notify"]["enabled"])
+        return 1
+
+    pid = int(state["pid"])
+    wav = Path(state["wav"])
+    try:
+        os.kill(pid, signal.SIGINT)
+    except OSError:
+        pass
+
+    deadline = time.time() + 5
+    while time.time() < deadline and pid_alive(pid):
+        time.sleep(0.05)
+    if pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    clear_state()
+
+    if not wav.exists() or wav.stat().st_size < 1024:
+        notify("❌ Grabación vacía", "No se captó audio del micrófono.", "critical",
+               enabled=cfg["notify"]["enabled"])
+        return 1
+
+    notify("⏳ Transcribiendo…", enabled=cfg["notify"]["enabled"])
+    try:
+        result = process_recording(wav, state, cfg)
+    except DictadoError as exc:
+        keep = PENDING_DIR / wav.name
+        try:
+            secure_mkdir(PENDING_DIR)
+            shutil.copy2(wav, keep)
+            secure_file(keep)
+        except OSError:
+            keep = wav
+        print(f"dictado: {exc}", file=sys.stderr)
+        notify("❌ Error de dictado", f"{exc}\nAudio guardado en {keep}", "critical",
+               enabled=cfg["notify"]["enabled"])
+        append_history({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "error": str(exc),
+            "wav": str(keep),
+        }, cfg)
+        return 1
+
+    for path in (wav, Path(str(wav) + ".trim.wav")):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    if result["inserted"]:
+        notify("✅ Insertado", f"{result['chars']} caracteres", enabled=cfg["notify"]["enabled"])
+    else:
+        notify("📋 Copiado al portapapeles",
+               "La ventana cambió: pega con Ctrl+V donde quieras.",
+               enabled=cfg["notify"]["enabled"])
+    return 0
+
+
+def cmd_toggle(cfg: dict) -> int:
+    return cmd_stop(cfg) if recording_state() else cmd_start(cfg)
+
+
+# --------------------------------------------------------------------------
+# Audio
+# --------------------------------------------------------------------------
+
+def audio_duration(path: Path) -> float:
+    try:
+        proc = run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=nw=1:nk=1", str(path),
+        ], timeout=15)
+        return float(proc.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
+def trim_silence(src: Path, cfg: dict) -> Path:
+    audio = cfg["audio"]
+    dst = Path(str(src) + ".trim.wav")
+    af = (
+        "silenceremove="
+        f"start_periods=1:start_duration={audio['silence_start_duration']}:"
+        f"start_threshold={audio['silence_threshold']}:"
+        f"stop_periods=1:stop_duration={audio['silence_stop_duration']}:"
+        f"stop_threshold={audio['silence_threshold']}"
+    )
+    try:
+        proc = run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(src), "-af", af,
+            "-ar", str(int(audio["rate"])), "-ac", str(int(audio["channels"])),
+            str(dst),
+        ], timeout=60)
+        if proc.returncode == 0 and dst.exists() and dst.stat().st_size > 1024:
+            return dst
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return src
+
+
+# --------------------------------------------------------------------------
+# Gemini API
+# --------------------------------------------------------------------------
+
+def api_key() -> str:
+    env = load_env()
+    key = env.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise DictadoError(
+            f"falta GEMINI_API_KEY en {ENV_FILE}. "
+            "Créala en https://aistudio.google.com/apikey"
+        )
+    return key
+
+
+def api_post(payload: dict, timeout: float, retries: int = 1, api_base: str | None = None) -> dict:
+    url = f"{api_base or DEFAULTS['stt']['api_base']}/interactions"
+    key = api_key()
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "x-goog-api-key": key,
+        "Content-Type": "application/json",
+        "User-Agent": "dictado/1.0",
+    }
+    last_error = "error desconocido"
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", "replace")
+            last_error = f"HTTP {exc.code}: {api_error_message(raw)}"
+            if exc.code in (429, 500, 502, 503, 504) and attempt < retries:
+                time.sleep(2)
+                continue
+            raise DictadoError(last_error) from exc
+        except urllib.error.URLError as exc:
+            last_error = f"sin conexión: {exc.reason}"
+            if attempt < retries:
+                time.sleep(1)
+                continue
+            raise DictadoError(last_error) from exc
+        except TimeoutError as exc:
+            last_error = "tiempo de espera agotado"
+            if attempt < retries:
+                time.sleep(1)
+                continue
+            raise DictadoError(last_error) from exc
+    raise DictadoError(last_error)
+
+
+def api_error_message(raw: str) -> str:
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw.strip()[:300] or "sin detalle"
+    # La API puede devolver {"error": {...}} o una lista de errores.
+    candidates = data if isinstance(data, list) else [data]
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        err = item.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message") or err.get("status") or ""
+            if msg:
+                return str(msg)[:300]
+        elif isinstance(err, str) and err:
+            return err[:300]
+        msg = item.get("message")
+        if isinstance(msg, str) and msg:
+            return msg[:300]
+    return raw.strip()[:300]
+
+
+def extract_output_text(data: dict) -> str:
+    text = data.get("output_text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    chunks: list[str] = []
+    for step in data.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        for content in step.get("content") or []:
+            if isinstance(content, dict) and content.get("type") == "text":
+                value = content.get("text")
+                if isinstance(value, str):
+                    chunks.append(value)
+    return "".join(chunks).strip()
+
+
+def transcribe(wav: Path, cfg: dict) -> str:
+    stt = cfg["stt"]
+    try:
+        raw = wav.read_bytes()
+    except OSError as exc:
+        raise DictadoError(f"no se pudo leer el audio: {exc}") from exc
+    payload = {
+        "model": f"models/{stt['model']}",
+        "input": [{
+            "type": "audio",
+            "data": base64.b64encode(raw).decode("ascii"),
+            "mime_type": "audio/wav",
+        }],
+        "generation_config": {
+            "transcription_config": {
+                "mode": stt["mode"],
+                "language_codes": [stt["language"]],
+                "custom_vocabulary": list(stt["custom_vocabulary"]),
+            }
+        },
+    }
+    data = api_post(payload, float(stt["timeout"]), api_base=str(stt["api_base"]))
+    text = extract_output_text(data)
+    if not text:
+        raise DictadoError("Gemini devolvió una transcripción vacía")
+    return text
+
+
+# --------------------------------------------------------------------------
+# Limpieza por reglas
+# --------------------------------------------------------------------------
+
+HARD_FILLERS = re.compile(
+    r"(?<![\wáéíóúüñ])"
+    r"(?:eh+|emm?|mmm+|aj[áa]m?|uh+)"
+    r"(?![\wáéíóúüñ])",
+    re.IGNORECASE,
+)
+
+CLAUSE_FILLER = re.compile(
+    r"(^|[,;:]\s*)"
+    r"(?:o sea|digamos|es decir|en plan|qué sé yo|cómo se llama|mira|oye|escucha|bueno|pues|este|esto)"
+    r"\s*,\s*",
+    re.IGNORECASE,
+)
+
+TAG_FILLER = re.compile(
+    r"\s*[,;]?\s*¿(?:sabes|no|verdad|me entiendes|cierto|o no)\?",
+    re.IGNORECASE,
+)
+
+WORD_REPEAT = re.compile(
+    r"(?<![\wáéíóúüñ])(\w+)(?:\s+\1)(?![\wáéíóúüñ])",
+    re.IGNORECASE,
+)
+
+
+def _norm_word(word: str) -> str:
+    return re.sub(r"^[^\wáéíóúüñ]+|[^\wáéíóúüñ]+$", "", word.lower())
+
+
+def collapse_phrase_repeats(text: str, max_n: int = 4) -> str:
+    words = text.split()
+    changed = True
+    while changed:
+        changed = False
+        size = min(max_n, len(words) // 2)
+        while size >= 2 and not changed:
+            i = 0
+            while i + 2 * size <= len(words):
+                left = [_norm_word(w) for w in words[i:i + size]]
+                right = [_norm_word(w) for w in words[i + size:i + 2 * size]]
+                if left == right and all(left):
+                    del words[i + size:i + 2 * size]
+                    changed = True
+                    break
+                i += 1
+            size -= 1
+    return " ".join(words)
+
+
+def capitalize(text: str) -> str:
+    text = re.sub(r"^(\s*)([a-záéíóúüñ])", lambda m: m.group(1) + m.group(2).upper(), text)
+    text = re.sub(r"([.!?]\s+)([a-záéíóúüñ])", lambda m: m.group(1) + m.group(2).upper(), text)
+    return text
+
+
+def looks_like_command(text: str) -> bool:
+    first = text.strip().split(" ", 1)[0].lower()
+    commands = {
+        "npm", "npx", "yarn", "pnpm", "git", "sudo", "apt", "apt-get", "cd",
+        "ls", "cat", "grep", "curl", "wget", "docker", "python", "python3",
+        "node", "bun", "make", "cargo", "go", "systemctl", "chmod", "chown",
+    }
+    return first in commands
+
+
+def _drop_tag(match: re.Match) -> str:
+    """Elimina ¿sabes?/¿no? conservando el corte de frase si lo había."""
+    rest = match.string[match.end():]
+    if re.match(r"\s*[A-ZÁÉÍÓÚÜÑ¿¡]", rest):
+        return ". "
+    return ""
+
+
+def clean_rules(text: str, cfg: dict) -> str:
+    if not cfg["cleanup"]["rules"]:
+        return text.strip()
+
+    out = text.strip()
+    out = re.sub(r"\s+", " ", out)
+    out = HARD_FILLERS.sub("", out)
+    out = TAG_FILLER.sub(_drop_tag, out)
+    previous = None
+    while previous != out:
+        previous = out
+        out = CLAUSE_FILLER.sub(r"\1", out)
+    # Falsos comienzos típicos: "quiero que, añadas", "y que, valide"
+    out = re.sub(r"\b(que|y que|o que|pero que),\s+", r"\1 ", out, flags=re.IGNORECASE)
+
+    previous = None
+    while previous != out:
+        previous = out
+        out = WORD_REPEAT.sub(r"\1", out)
+    out = collapse_phrase_repeats(out)
+
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+    out = re.sub(r"([,.;:!?])\1+", r"\1", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\s*([,;])\s*", r"\1 ", out)
+    out = re.sub(r",\s*,+", ",", out)
+    # "el archivo, ese que..." tras colapsar una repetición
+    out = re.sub(
+        r"\b(el|la|los|las|un|una)\s+([\wáéíóúüñ]+),\s+(ese|esa|este|esta|aquel|aquella)\b",
+        r"\1 \2 \3", out, flags=re.IGNORECASE,
+    )
+    # Coma espuria tras colapsar "un botón, un botón de login"
+    out = re.sub(r"([a-záéíóúüñ]+),\s+(de|del|con|para)\b", r"\1 \2", out)
+    # "pues" intercalado sin pausa real
+    out = re.sub(r",\s+pues\s+", ", ", out, flags=re.IGNORECASE)
+    out = re.sub(r"(^|[.!?]\s+)pues\s+", r"\1", out, flags=re.IGNORECASE)
+    out = re.sub(r"^[\s,;:.]+", "", out)
+    out = out.strip()
+
+    # Conjunciones en minúscula cuando van en medio de la frase
+    out = re.sub(r"(?<=[a-záéíóúüñ,;:])\s+(Y|O|Pero|Sino)\s+",
+                 lambda m: " " + m.group(1).lower() + " ", out)
+
+    if not looks_like_command(out):
+        out = capitalize(out)
+
+    words = out.split()
+    if (
+        len(words) >= 6
+        and out
+        and out[-1].isalnum()
+        and not looks_like_command(out)
+    ):
+        out += "."
+    return out
+
+
+# --------------------------------------------------------------------------
+# Limpieza con LLM
+# --------------------------------------------------------------------------
+
+POLISH_SYSTEM = """Eres un corrector de dictado por voz en español. Recibes una transcripción ya limpia y devuelves únicamente el texto final.
+
+- Elimina muletillas, titubeos, falsos comienzos y repeticiones que queden.
+- Une frases cortadas y corrige puntuación, mayúsculas y espacios.
+- Conserva el significado, el orden de las ideas y el registro.
+- Conserva tal cual: nombres propios, términos técnicos, rutas, URLs, comandos, nombres de archivo, identificadores de código, números y unidades.
+- No añadas información, no pidas aclaraciones y no respondas al contenido.
+- Devuelve solo el texto final, sin comillas, sin markdown y sin explicaciones."""
+
+FORBIDDEN_PREFIXES = (
+    "aquí tienes", "aqui tienes", "claro", "por supuesto", "texto limpio",
+    "resultado", "la transcripción", "la transcripcion",
+)
+
+TECH_PATTERNS = [
+    r"`[^`]+`",
+    r"https?://\S+",
+    r"(?<![\w/])[\w.-]+/[\w./-]+",
+    r"(?<![\w-])--[A-Za-z][\w-]*",
+    r"\b[a-zA-Z][a-zA-Z0-9]*_[a-zA-Z0-9_]+\b",
+    r"\b[a-z]+[A-Z][a-zA-Z0-9]*\b",
+    r"\b\w+\.(?:ts|tsx|js|jsx|py|json|toml|md|sh|css|html|ya?ml|rs|go|java|c|cc|cpp|h|hpp)\b",
+]
+
+
+def tech_tokens(text: str) -> list[str]:
+    found: list[str] = []
+    for pattern in TECH_PATTERNS:
+        for match in re.findall(pattern, text):
+            token = match.strip("`")
+            if token and token not in found:
+                found.append(token)
+    return found
+
+
+def count_sentences(text: str) -> int:
+    parts = [p for p in re.split(r"[.!?]+(?:\s|$)", text.strip()) if p.strip()]
+    return max(1, len(parts))
+
+
+def has_residual_repetition(text: str) -> bool:
+    words = re.findall(r"\w+", text.lower())
+    for i in range(len(words) - 1):
+        if words[i] == words[i + 1]:
+            return True
+    for i in range(len(words) - 5):
+        if words[i:i + 3] == words[i + 3:i + 6]:
+            return True
+    return False
+
+
+def should_polish(text: str, cfg: dict) -> bool:
+    cleanup = cfg["cleanup"]
+    if not cleanup["llm"]:
+        return False
+    if len(text) >= int(cleanup["llm_min_chars"]):
+        return True
+    if count_sentences(text) >= int(cleanup["llm_min_sentences"]):
+        return True
+    return has_residual_repetition(text)
+
+
+def valid_polish(original: str, candidate: str, cfg: dict) -> tuple[bool, str]:
+    text = candidate.strip().strip('"').strip("“”").strip()
+    if not text:
+        return False, "respuesta vacía"
+    lowered = text.lower()
+    if any(lowered.startswith(prefix) for prefix in FORBIDDEN_PREFIXES):
+        return False, "la respuesta parece una explicación"
+    if "```" in text:
+        return False, "la respuesta contiene bloques de código"
+    ratio = len(text) / max(1, len(original))
+    if ratio < float(cfg["cleanup"]["ratio_min"]) or ratio > float(cfg["cleanup"]["ratio_max"]):
+        return False, f"longitud fuera de rango ({ratio:.2f})"
+    missing = [tok for tok in tech_tokens(original) if tok not in text]
+    if missing:
+        return False, "perdió términos técnicos: " + ", ".join(missing[:3])
+    return True, text
+
+
+def polish(text: str, cfg: dict) -> tuple[str, str | None]:
+    """Devuelve (texto, aviso). Si el LLM falla o no es fiable, usa el original."""
+    cleanup = cfg["cleanup"]
+    payload = {
+        "model": f"models/{cleanup['llm_model']}",
+        "system_instruction": POLISH_SYSTEM,
+        "input": text,
+        "generation_config": {"max_output_tokens": 4096},
+    }
+    try:
+        data = api_post(payload, float(cleanup["llm_timeout"]),
+                        api_base=str(cfg["stt"]["api_base"]))
+    except DictadoError as exc:
+        return text, f"sin pulido: {exc}"
+    candidate = extract_output_text(data)
+    ok, result = valid_polish(text, candidate, cfg)
+    if not ok:
+        return text, f"pulido descartado: {result}"
+    return result, None
+
+
+# --------------------------------------------------------------------------
+# Inserción
+# --------------------------------------------------------------------------
+
+def insert_text(text: str, state: dict, cfg: dict) -> bool:
+    wid = state.get("window")
+    previous = get_clipboard() if cfg["insert"]["restore_clipboard"] else ""
+    if not set_clipboard(text):
+        raise DictadoError(
+            "no se pudo escribir en el portapapeles (¿xclip o wl-clipboard instalado?)"
+        )
+
+    # En Wayland no inyectamos pulsaciones: el texto queda en el portapapeles.
+    if is_wayland():
+        return False
+
+    current = active_window()
+    if not wid or current != wid or not window_alive(wid):
+        return False
+
+    key = cfg["insert"]["key"] or detect_paste_key(wid)
+    time.sleep(max(0, int(cfg["insert"]["paste_delay_ms"])) / 1000.0)
+    try:
+        proc = run(["xdotool", "key", "--clearmodifiers", key], timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DictadoError(f"xdotool falló: {exc}") from exc
+    if proc.returncode != 0:
+        raise DictadoError(f"xdotool devolvió {proc.returncode}: {proc.stderr.strip()[:200]}")
+
+    if cfg["insert"]["restore_clipboard"] and previous:
+        restore_clipboard_later(previous)
+    return True
+
+
+# --------------------------------------------------------------------------
+# Historial
+# --------------------------------------------------------------------------
+
+def append_history(entry: dict, cfg: dict) -> None:
+    if not cfg["history"]["enabled"]:
+        return
+    try:
+        secure_mkdir(DATA_DIR)
+        with HISTORY_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        secure_file(HISTORY_FILE)
+        limit = int(cfg["history"]["max_entries"])
+        if limit > 0:
+            rotate_history(limit)
+    except OSError:
+        pass
+
+
+def rotate_history(limit: int) -> None:
+    try:
+        lines = HISTORY_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return
+    if len(lines) <= limit:
+        return
+    try:
+        tmp = HISTORY_FILE.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines[-limit:]) + "\n", encoding="utf-8")
+        secure_file(tmp)
+        os.replace(tmp, HISTORY_FILE)
+    except OSError:
+        pass
+
+
+def prune_pending(days: int) -> None:
+    if days <= 0:
+        return
+    cutoff = time.time() - days * 86400
+    try:
+        for path in PENDING_DIR.iterdir():
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------------
+# Procesamiento completo
+# --------------------------------------------------------------------------
+
+def process_recording(wav: Path, state: dict, cfg: dict) -> dict:
+    duration = audio_duration(wav)
+    if duration and duration < float(cfg["audio"]["min_duration"]):
+        raise DictadoError(f"grabación demasiado corta ({duration:.1f} s)")
+
+    trimmed = trim_silence(wav, cfg)
+    trimmed_duration = audio_duration(trimmed)
+    if trimmed_duration and trimmed_duration < float(cfg["audio"]["min_duration"]):
+        raise DictadoError(f"solo hay silencio ({trimmed_duration:.1f} s)")
+
+    t0 = time.monotonic()
+    raw = transcribe(trimmed, cfg)
+    stt_ms = int((time.monotonic() - t0) * 1000)
+
+    rules = clean_rules(raw, cfg)
+
+    t1 = time.monotonic()
+    warning = None
+    final = rules
+    if should_polish(rules, cfg):
+        final, warning = polish(rules, cfg)
+    llm_ms = int((time.monotonic() - t1) * 1000)
+
+    inserted = insert_text(final, state, cfg)
+
+    append_history({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "duration_s": round(duration, 2),
+        "raw": raw,
+        "rules": rules,
+        "final": final,
+        "stt": cfg["stt"]["model"],
+        "stt_ms": stt_ms,
+        "llm": cfg["cleanup"]["llm_model"] if final != rules else None,
+        "llm_ms": llm_ms,
+        "warning": warning,
+        "inserted": inserted,
+    }, cfg)
+    prune_pending(int(cfg["history"]["pending_days"]))
+    return {"text": final, "chars": len(final), "inserted": inserted, "warning": warning}
+
+
+# --------------------------------------------------------------------------
+# Diagnóstico
+# --------------------------------------------------------------------------
+
+def cmd_doctor(cfg: dict) -> int:
+    results: list[tuple[str, str, str]] = []
+
+    def check(name: str, ok: bool, detail: str = "", warn: bool = False) -> None:
+        results.append((name, "OK" if ok else ("WARN" if warn else "FAIL"), detail))
+
+    wayland = is_wayland()
+    check("sesión gráfica", True,
+          "Wayland (solo portapapeles)" if wayland else "X11")
+
+    required = ["arecord", "notify-send"]
+    optional = ["ffmpeg", "ffprobe"]
+    if wayland:
+        required += ["wl-copy", "wl-paste"]
+    else:
+        required += ["xclip", "xdotool"]
+
+    for binary in required:
+        path = which(binary)
+        check(f"binario {binary}", bool(path), path or "no encontrado")
+    for binary in optional:
+        path = which(binary)
+        check(f"binario {binary}", bool(path),
+              path or "opcional: sin él no se recorta el silencio", warn=True)
+
+    # Micrófono
+    try:
+        proc = run(["arecord", "-l"], timeout=10)
+        has_card = "tarjeta" in proc.stdout.lower() or "card" in proc.stdout.lower()
+        check("dispositivo de captura", has_card,
+              (proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else "sin tarjetas"))
+    except (OSError, subprocess.SubprocessError) as exc:
+        check("dispositivo de captura", False, str(exc))
+
+    # Prueba real de grabación
+    probe = STATE_DIR / "doctor-probe.wav"
+    try:
+        secure_mkdir(STATE_DIR)
+        proc = run([
+            "arecord", "-q", "-D", str(cfg["audio"]["device"]), "-f", "S16_LE",
+            "-r", str(int(cfg["audio"]["rate"])), "-c", "1", "-d", "1", str(probe),
+        ], timeout=15)
+        size = probe.stat().st_size if probe.exists() else 0
+        check("grabación de prueba", proc.returncode == 0 and size > 1024, f"{size} bytes")
+    except (OSError, subprocess.SubprocessError) as exc:
+        check("grabación de prueba", False, str(exc))
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+    # Portapapeles
+    try:
+        test_value = f"dictado-doctor-{os.getpid()}"
+        backend = "wl-clipboard" if wayland else "xclip"
+        if set_clipboard(test_value):
+            check("portapapeles", get_clipboard().strip() == test_value, f"{backend} responde")
+        else:
+            check("portapapeles", False, f"{backend} no responde")
+    except Exception as exc:  # noqa: BLE001
+        check("portapapeles", False, str(exc))
+
+    # Ventana activa (solo X11)
+    if wayland:
+        check("ventana activa", False,
+              "no disponible en Wayland: el texto se copia al portapapeles", warn=True)
+    else:
+        wid = active_window()
+        check("ventana activa", bool(wid),
+              f"id {wid}, clase {window_class(wid) or '?'}" if wid else "xdotool no responde")
+
+    # Clave y API
+    key = load_env().get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+    check("GEMINI_API_KEY", bool(key), "configurada" if key else f"vacía en {ENV_FILE}")
+    if key:
+        try:
+            data = api_post({
+                "model": f"models/{cfg['cleanup']['llm_model']}",
+                "input": "Responde solo: ok",
+                "generation_config": {"max_output_tokens": 64},
+            }, 30, retries=0, api_base=str(cfg["stt"]["api_base"]))
+            text = extract_output_text(data)
+            check("API de Gemini", bool(text), text[:60] or "respuesta vacía")
+        except Exception as exc:  # noqa: BLE001
+            check("API de Gemini", False, str(exc) or exc.__class__.__name__)
+    else:
+        check("API de Gemini", False, "sin clave", warn=True)
+
+    # Permisos de archivos sensibles
+    if ENV_FILE.exists():
+        mode = ENV_FILE.stat().st_mode & 0o777
+        check("permisos de env", mode & 0o077 == 0,
+              f"{oct(mode)}" + ("" if mode & 0o077 == 0 else " → chmod 600"))
+    else:
+        check("permisos de env", False, "no existe", warn=True)
+
+    if HISTORY_FILE.exists():
+        mode = HISTORY_FILE.stat().st_mode & 0o777
+        check("permisos del historial", mode & 0o077 == 0,
+              f"{oct(mode)}" + ("" if mode & 0o077 == 0 else " → chmod 600"), warn=True)
+
+    # Notificaciones del escritorio (Cinnamon las descarta si están desactivadas)
+    try:
+        proc = run(["gsettings", "get", "org.cinnamon.desktop.notifications",
+                    "display-notifications"], timeout=5)
+        if proc.returncode == 0:
+            value = proc.stdout.strip()
+            detail = f"display-notifications = {value}"
+            if value != "true":
+                detail += " → gsettings set org.cinnamon.desktop.notifications display-notifications true"
+            check("notificaciones del escritorio", value == "true", detail, warn=True)
+        else:
+            check("notificaciones del escritorio", True, "no verificable en este escritorio", warn=True)
+    except (OSError, subprocess.SubprocessError):
+        check("notificaciones del escritorio", True, "no verificable en este escritorio", warn=True)
+
+    # Atajo de teclado (delegado en hotkey.sh)
+    script = hotkey_script()
+    if script:
+        try:
+            proc = run(
+                ["bash", str(script), "status"],
+                timeout=15,
+                env={**os.environ, "DICTADO_BIN": self_path()},
+            )
+            detail = (proc.stdout or proc.stderr).strip().splitlines()
+            check("atajo de teclado", proc.returncode == 0,
+                  detail[0] if detail else "sin detalle")
+        except (OSError, subprocess.SubprocessError) as exc:
+            check("atajo de teclado", False, str(exc))
+    else:
+        check("atajo de teclado", False, "no se encontró hotkey.sh", warn=True)
+
+    # opencode paste
+    cli_json = HOME / ".config" / "opencode" / "cli.json"
+    if cli_json.exists():
+        try:
+            data = json.loads(cli_json.read_text(encoding="utf-8"))
+            paste = (data.get("prompt") or {}).get("paste")
+            check("opencode prompt.paste", paste == "full", str(paste or "no definido"))
+        except (OSError, ValueError) as exc:
+            check("opencode prompt.paste", False, str(exc))
+    else:
+        check("opencode prompt.paste", True, "opencode no detectado", warn=True)
+
+    width = max(len(name) for name, _, _ in results) + 2
+    for name, status, detail in results:
+        icon = {"OK": "✓", "WARN": "!", "FAIL": "✗"}[status]
+        print(f"{icon} {name:<{width}} {detail}")
+
+    failures = sum(1 for _, status, _ in results if status == "FAIL")
+    warnings = sum(1 for _, status, _ in results if status == "WARN")
+    print(f"\n{len(results)} comprobaciones: {failures} fallos, {warnings} avisos.")
+    return 1 if failures else 0
+
+
+# --------------------------------------------------------------------------
+# Comandos auxiliares
+# --------------------------------------------------------------------------
+
+def cmd_status(cfg: dict) -> int:
+    state = recording_state()
+    if state:
+        elapsed = time.time() - float(state.get("started", time.time()))
+        print(f"grabando desde hace {elapsed:.1f} s ({state.get('wav')})")
+        return 0
+    print("inactivo")
+    return 1
+
+
+def cmd_clean_text(text: str, cfg: dict) -> int:
+    rules = clean_rules(text, cfg)
+    print("--- reglas ---")
+    print(rules)
+    if should_polish(rules, cfg):
+        final, warning = polish(rules, cfg)
+        print("--- final ---")
+        print(final)
+        if warning:
+            print(f"--- aviso: {warning} ---", file=sys.stderr)
+    else:
+        print("--- sin pulido (texto corto) ---", file=sys.stderr)
+    return 0
+
+
+def cmd_transcribe_file(path: Path, cfg: dict) -> int:
+    if not path.exists():
+        raise DictadoError(f"no existe {path}")
+    print(transcribe(path, cfg))
+    return 0
+
+
+def cmd_history(limit: int) -> int:
+    if not HISTORY_FILE.exists():
+        print("sin historial todavía")
+        return 0
+    lines = HISTORY_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    for line in lines[-limit:]:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        ts = entry.get("ts", "")[:19].replace("T", " ")
+        if entry.get("error"):
+            print(f"{ts}  ERROR  {entry['error']}")
+            continue
+        print(f"{ts}  {entry.get('duration_s', '?')}s  stt={entry.get('stt_ms', '?')}ms  "
+              f"llm={entry.get('llm_ms', 0)}ms  {'pegado' if entry.get('inserted') else 'portapapeles'}")
+        print(f"   bruto:  {entry.get('raw', '')}")
+        print(f"   final:  {entry.get('final', '')}")
+    return 0
+
+
+def cmd_config(action: str, cfg: dict) -> int:
+    if action == "path":
+        print(f"config: {CONFIG_FILE}")
+        print(f"env:    {ENV_FILE}")
+        print(f"datos:  {DATA_DIR}")
+        return 0
+    if action == "show":
+        print(f"# {CONFIG_FILE}")
+        if CONFIG_FILE.exists():
+            print(CONFIG_FILE.read_text(encoding="utf-8", errors="replace"))
+        else:
+            print(json.dumps(DEFAULTS, indent=2, ensure_ascii=False))
+        return 0
+    if action == "edit":
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+        secure_mkdir(CONFIG_DIR)
+        if not CONFIG_FILE.exists():
+            CONFIG_FILE.write_text("# Configuración de dictado\n", encoding="utf-8")
+        try:
+            return subprocess.call([editor, str(CONFIG_FILE)])
+        except OSError as exc:
+            raise DictadoError(f"no se pudo abrir el editor {editor}: {exc}") from exc
+    if action == "set-key":
+        key = getpass.getpass("Clave de Gemini (no se muestra): ").strip()
+        if not key:
+            raise DictadoError("clave vacía")
+        if not re.fullmatch(r"AIza[0-9A-Za-z_-]{20,}", key):
+            raise DictadoError("formato inesperado: debería empezar por AIza")
+        secure_mkdir(CONFIG_DIR)
+        lines: list[str] = []
+        if ENV_FILE.exists():
+            lines = [
+                line for line in ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+                if not line.strip().startswith("GEMINI_API_KEY=")
+            ]
+        lines.append(f"GEMINI_API_KEY={key}")
+        ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        secure_file(ENV_FILE)
+        print(f"clave guardada en {ENV_FILE} (permisos 600)")
+        return 0
+    raise DictadoError(f"acción de configuración desconocida: {action}")
+
+
+def cmd_purge(purge_all: bool, assume_yes: bool) -> int:
+    scope = "configuración, historial y audio" if purge_all else "historial y audio pendiente"
+    if not assume_yes:
+        try:
+            answer = input(f"¿Borrar {scope}? [s/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("s", "si", "sí", "y", "yes"):
+            print("cancelado")
+            return 1
+
+    removed = 0
+    if purge_all:
+        if CONFIG_DIR.exists():
+            shutil.rmtree(CONFIG_DIR, ignore_errors=True)
+            removed += 1
+    else:
+        for path in (HISTORY_FILE,):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    for directory in (PENDING_DIR, STATE_DIR):
+        if directory.exists():
+            for path in directory.iterdir():
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    if purge_all:
+        print("dictado desinstalado por completo (configuración, historial y audio)")
+    else:
+        print(f"borrados {removed} archivos de historial y audio")
+    return 0
+
+
+def cmd_hotkey(action: str, combo: str | None) -> int:
+    script = hotkey_script()
+    if not script:
+        raise DictadoError("no se encontró hotkey.sh (reinstala o define DICTADO_HOTKEY_SCRIPT)")
+    cmd = ["bash", str(script), action]
+    if combo:
+        cmd.append(combo)
+    try:
+        return subprocess.call(cmd, env={**os.environ, "DICTADO_BIN": self_path()})
+    except OSError as exc:
+        raise DictadoError(f"no se pudo ejecutar hotkey.sh: {exc}") from exc
+
+
+def cmd_restore_clipboard(path: str) -> int:
+    time.sleep(1.5)
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+        set_clipboard(text)
+    except OSError:
+        pass
+    finally:
+        try:
+            Path(path).unlink()
+        except OSError:
+            pass
+    return 0
+
+
+# --------------------------------------------------------------------------
+# main
+# --------------------------------------------------------------------------
+
+def main(argv: list[str]) -> int:
+    # Los archivos de audio, estado e historial son privados por defecto.
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(prog="dictado", description="Dictado por voz con limpieza.")
+    parser.add_argument("--version", action="version", version=f"dictado {__version__}")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("toggle", help="empieza o para según el estado")
+    sub.add_parser("start", help="empezar a grabar")
+    sub.add_parser("stop", help="parar, transcribir, limpiar y pegar")
+    sub.add_parser("status", help="estado actual")
+    sub.add_parser("doctor", help="diagnóstico del entorno")
+    sub.add_parser("history", help="últimos dictados").add_argument("-n", type=int, default=10)
+
+    config = sub.add_parser("config", help="ver o editar la configuración")
+    config.add_argument("action", choices=["path", "show", "edit", "set-key"])
+
+    hotkey = sub.add_parser("hotkey", help="configurar el atajo global")
+    hotkey.add_argument("action", choices=["set", "status", "remove"])
+    hotkey.add_argument("combo", nargs="?")
+
+    purge = sub.add_parser("purge", help="borrar historial y audio")
+    purge.add_argument("--all", action="store_true", help="borrar también la configuración")
+    purge.add_argument("--yes", action="store_true", help="no pedir confirmación")
+
+    clean = sub.add_parser("clean", help="probar la limpieza")
+    clean.add_argument("--text")
+    clean.add_argument("--file")
+
+    tr = sub.add_parser("transcribe", help="probar solo la transcripción")
+    tr.add_argument("file")
+
+    hidden = sub.add_parser("_restore-clipboard")
+    hidden.add_argument("file")
+
+    args = parser.parse_args(argv)
+    if not args.command:
+        parser.print_help()
+        return 2
+
+    if args.command == "_restore-clipboard":
+        return cmd_restore_clipboard(args.file)
+
+    cfg = load_config()
+
+    try:
+        if args.command == "toggle":
+            return cmd_toggle(cfg)
+        if args.command == "start":
+            return cmd_start(cfg)
+        if args.command == "stop":
+            return cmd_stop(cfg)
+        if args.command == "status":
+            return cmd_status(cfg)
+        if args.command == "doctor":
+            return cmd_doctor(cfg)
+        if args.command == "history":
+            return cmd_history(args.n)
+        if args.command == "config":
+            return cmd_config(args.action, cfg)
+        if args.command == "hotkey":
+            return cmd_hotkey(args.action, args.combo)
+        if args.command == "purge":
+            return cmd_purge(args.all, args.yes)
+        if args.command == "transcribe":
+            return cmd_transcribe_file(Path(args.file).expanduser(), cfg)
+        if args.command == "clean":
+            if args.text:
+                return cmd_clean_text(args.text, cfg)
+            if args.file:
+                try:
+                    text = Path(args.file).expanduser().read_text(encoding="utf-8")
+                except OSError as exc:
+                    raise DictadoError(f"no se pudo leer {args.file}: {exc}") from exc
+                return cmd_clean_text(text, cfg)
+            text = sys.stdin.read()
+            return cmd_clean_text(text, cfg)
+    except DictadoError as exc:
+        print(f"dictado: {exc}", file=sys.stderr)
+        notify("❌ Dictado", str(exc), "critical", enabled=cfg["notify"]["enabled"])
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+    parser.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

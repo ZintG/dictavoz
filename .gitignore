@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Secretos y datos locales (nunca deben versionarse)
+.env
+*.env
+config/env
+config/config.toml
+history.jsonl
+*.wav
+
+# Temporales y registros
+*.log
+*.tmp
+.DS_Store
