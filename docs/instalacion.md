@@ -62,6 +62,7 @@ prefieres instalarlas a mano.
 | Recortar silencio | `ffmpeg` | `ffmpeg` | `ffmpeg` | `ffmpeg` | `ffmpeg` |
 | Portapapeles X11 | `xclip` | `xclip` | `xclip` | `xclip` | `xclip` |
 | Pegar en X11 | `xdotool` | `xdotool` | `xdotool` | `xdotool` | `xdotool` |
+| Propiedades de ventana X11 | `x11-utils` | `xprop` | `xorg-xprop` | `xprop` | `xprop` |
 | Notificaciones | `libnotify-bin` | `libnotify` | `libnotify` | `libnotify-tools` | `libnotify` |
 | Portapapeles Wayland | `wl-clipboard` | `wl-clipboard` | `wl-clipboard` | `wl-clipboard` | `wl-clipboard` |
 | Python 3.9/3.10 | `python3-tomli` | — | — | — | `py3-tomli` |
@@ -75,19 +76,19 @@ Ejemplos:
 ```bash
 # Debian, Ubuntu, Linux Mint, Pop!_OS, elementary
 sudo apt update
-sudo apt install alsa-utils ffmpeg xclip xdotool libnotify-bin
+sudo apt install alsa-utils ffmpeg x11-utils xclip xdotool libnotify-bin
 
 # Fedora
-sudo dnf install alsa-utils ffmpeg xclip xdotool libnotify
+sudo dnf install alsa-utils ffmpeg xprop xclip xdotool libnotify
 
 # Arch, Manjaro, EndeavourOS
-sudo pacman -S alsa-utils ffmpeg xclip xdotool libnotify
+sudo pacman -S alsa-utils ffmpeg xorg-xprop xclip xdotool libnotify
 
 # openSUSE
-sudo zypper install alsa-utils ffmpeg xclip xdotool libnotify-tools
+sudo zypper install alsa-utils ffmpeg xprop xclip xdotool libnotify-tools
 
 # Alpine
-sudo apk add alsa-utils ffmpeg xclip xdotool libnotify wl-clipboard
+sudo apk add alsa-utils ffmpeg xprop xclip xdotool libnotify wl-clipboard
 ```
 
 ## Instalación no interactiva

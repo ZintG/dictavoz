@@ -328,7 +328,7 @@ else
     if command -v "$binary" >/dev/null 2>&1; then ok "$binary disponible"
     else warn "falta $binary"; fi
   done
-  for binary in ffmpeg xclip xdotool wl-copy; do
+  for binary in ffmpeg xclip xdotool xprop wl-copy; do
     if command -v "$binary" >/dev/null 2>&1; then ok "$binary disponible"
     else info "$binary no está (opcional según la sesión)"; fi
   done

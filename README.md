@@ -51,7 +51,8 @@ transcripción y el pulido opcional llaman a la API.
 - Python 3.9 o superior (`python3-tomli` en versiones anteriores a 3.11).
 - `arecord` (alsa-utils), `notify-send` (libnotify).
 - `ffmpeg` y `ffprobe` para recortar el silencio (recomendado).
-- En X11: `xclip` y `xdotool`.
+- En X11: `xclip`, `xdotool` y `xprop` (`x11-utils` en Debian/Ubuntu,
+  `xorg-xprop` en Arch; `xprop` en Fedora, openSUSE y Alpine).
 - En Wayland: `wl-clipboard`.
 - Una clave gratuita de Google AI Studio.
 

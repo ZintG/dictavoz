@@ -17,6 +17,20 @@ Todas las versiones notables se documentan aquí. El formato sigue
   así que conservan el valor actual y muestran un aviso.
 - Si la configuración de opencode es inválida o `prompt` no es un objeto, se
   deja intacta en lugar de sobrescribirla.
+- `insert.key = "type"` escribe el texto con `xdotool type` en lugar de
+  enviarlo como si fuera una tecla.
+- `api_post` captura `socket.timeout` también en Python 3.9, con el mismo
+  reintento y el mismo mensaje de tiempo de espera agotado.
+- La limpieza por reglas conserva las comas legítimas antes de `de`, `del`,
+  `con` y `para`, no colapsa palabras con dígitos y mantiene `esto` al inicio
+  de frase.
+- El instalador incluye `xprop` y `doctor` lo comprueba en X11, avisando de
+  que sin él no se distinguen las terminales.
+- El aviso al empezar a grabar ya no depende del atajo configurado.
+- Si falla la transcripción y el audio se copia a pendientes, se borran el wav
+  original y su `.trim.wav`; si la copia falla, se conservan ambos.
+- `dictado purge` rechaza borrar nada mientras hay una grabación activa,
+  también con `--all`, y pide pararla primero con `dictado stop`.
 
 ## [1.0.0] - 2026-11-13
 
